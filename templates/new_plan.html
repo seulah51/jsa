@@ -39,7 +39,60 @@
     </div>
   {% endif %}
 
+  <div class="mb-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+    <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <h3 class="text-sm font-medium text-slate-800">엑셀로 일괄 등록</h3>
+        <p class="mt-0.5 text-[11px] text-slate-500">
+          건수가 많을 때는 엑셀 양식에 작성한 뒤 업로드하면 한 번에 임시저장됩니다.
+          아래에서 <span class="font-medium text-slate-700">부서·계획 월</span>을 먼저 선택하세요.
+          업로드한 내용은 임시저장되며, 검토 후 직접 최종제출해야 합니다.
+        </p>
+      </div>
+      <div class="flex flex-wrap items-center gap-2">
+        <a
+          href="{{ url_for('download_plan_template') }}"
+          class="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+        >
+          엑셀 양식 다운로드
+        </a>
+        <form
+          id="excel-upload-form"
+          method="post"
+          action="{{ url_for('upload_plan_excel') }}"
+          enctype="multipart/form-data"
+          class="flex items-center gap-2"
+        >
+          <input type="hidden" name="department" id="upload-department" />
+          <input type="hidden" name="year_month" id="upload-year-month" />
+          <input
+            type="file"
+            name="excel_file"
+            accept=".xlsx"
+            required
+            class="block text-xs text-slate-600 file:mr-2 file:rounded-md file:border file:border-slate-300 file:bg-white file:px-2 file:py-1 file:text-xs file:font-medium file:text-slate-700 hover:file:bg-slate-50"
+          />
+          <button
+            type="submit"
+            class="inline-flex items-center rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700"
+          >
+            엑셀 업로드
+          </button>
+        </form>
+      </div>
+    </div>
+
+    <div class="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
+      <span class="font-semibold">⚠️ 중요</span> — 엑셀 업로드는
+      <span class="font-semibold">계약금액이 해당 계획 월에 전액 지급되는 일시불 건</span>,
+      또는 <span class="font-semibold">분납 건의 1차 지급분을 반영할 때만</span> 사용하세요.
+      기존에 작성된 건 중 <span class="font-semibold">잔액이 남아 있는 경우에는 다음 달로 자동 이월</span>되므로,
+      엑셀로 다시 등록하면 <span class="font-semibold">중복 작성될 수 있습니다.</span>
+    </div>
+  </div>
+
   <form
+    id="plan-form"
     method="post"
     class="space-y-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm"
     data-is-closed="{{ '1' if is_closed else '0' }}"
@@ -92,7 +145,7 @@
           <p id="carry-over-info" class="text-[11px] text-slate-500"></p>
         </div>
         <div class="flex items-center gap-2">
-          <p class="text-xs text-slate-500">업체명, 금액, 내용을 행 단위로 입력하세요. 비어 있는 행은 자동으로 무시됩니다.</p>
+          <p class="text-xs text-slate-500">업체명·계약금액·계획금액은 필수입니다. 비어 있는 행은 자동으로 무시됩니다.</p>
           <button
             type="button"
             id="add-row-btn"
@@ -108,9 +161,9 @@
           <thead class="bg-slate-50">
             <tr>
               <th class="px-3 py-2 text-center text-xs font-medium text-slate-500 w-10">NO</th>
-              <th class="px-3 py-2 text-center text-xs font-medium text-slate-600 w-40">업체명</th>
-              <th class="px-3 py-2 text-center text-xs font-medium text-slate-600 w-40">계약금액</th>
-              <th class="px-3 py-2 text-center text-xs font-medium text-slate-600 w-40">계획금액</th>
+              <th class="px-3 py-2 text-center text-xs font-medium text-slate-600 w-40">업체명 <span class="text-red-500">*</span></th>
+              <th class="px-3 py-2 text-center text-xs font-medium text-slate-600 w-40">계약금액 <span class="text-red-500">*</span></th>
+              <th class="px-3 py-2 text-center text-xs font-medium text-slate-600 w-40">계획금액 <span class="text-red-500">*</span></th>
               <th class="px-3 py-2 text-center text-xs font-medium text-slate-600 w-auto">내용</th>
               <th class="px-3 py-2 text-center text-xs font-medium text-slate-500 w-16">삭제</th>
             </tr>
@@ -218,11 +271,13 @@
 
   <script>
     (function () {
-      const form = document.querySelector('form[method="post"]');
-      const monthInput = document.querySelector('input[name="year_month"]');
+      // 메인 등록 폼을 id 로 정확히 지정한다. (엑셀 업로드 폼도 method=post 라
+      // 단순 querySelector 로는 업로드 폼이 먼저 잡혀 부서/월을 빈 값으로 읽는 문제가 있었다.)
+      const form = document.getElementById('plan-form');
+      const monthInput = form.querySelector('input[name="year_month"]');
       const addRowBtn = document.getElementById('add-row-btn');
-      const rows = Array.from(document.querySelectorAll('tbody tr[data-row-index]'));
-      const departmentSelect = document.querySelector('select[name="department"]');
+      const rows = Array.from(form.querySelectorAll('tbody tr[data-row-index]'));
+      const departmentSelect = form.querySelector('select[name="department"]');
       const deleteButtons = document.querySelectorAll('.delete-row-btn');
       const carryOverInfo = document.getElementById('carry-over-info');
       const loadDraftBtn = document.getElementById('load-draft-btn');
@@ -350,6 +405,9 @@
       // 이월 계획 자동 입력: 현재 선택한 계획 월의 이전 달 + 부서 기준으로 필터링
       const carryOverPlans = {{ carry_over_plans|tojson|safe }};
 
+      // 임시저장(draft)이 존재하는 "부서|월" 목록 (엑셀 업로드 교체 확인창 노출 판단)
+      const draftKeys = {{ draft_keys|tojson|safe }};
+
       function applyCarryOver() {
         const dept = departmentSelect ? departmentSelect.value : '';
         const ym = monthInput ? monthInput.value : '';
@@ -462,6 +520,43 @@
           inputs.forEach((input) => {
             input.value = input.value.replace(/[^0-9]/g, '');
           });
+        });
+      }
+
+      // 엑셀 업로드: 위에서 선택한 부서/계획 월을 업로드 폼에 함께 전송
+      const uploadForm = document.getElementById('excel-upload-form');
+      const uploadDeptField = document.getElementById('upload-department');
+      const uploadYmField = document.getElementById('upload-year-month');
+      if (uploadForm) {
+        uploadForm.addEventListener('submit', function (e) {
+          const dept = departmentSelect ? departmentSelect.value : '';
+          const ym = monthInput ? monthInput.value : '';
+          if (!dept || !ym) {
+            e.preventDefault();
+            alert('부서와 계획 월을 먼저 선택해 주세요.');
+            return;
+          }
+
+          // 선택한 부서/월에 임시저장본이 있을 때만, 교체 확인을 받는다.
+          const hasDraft = draftKeys.indexOf(dept + '|' + ym) !== -1;
+          if (hasDraft) {
+            const deptLabel =
+              departmentSelect && departmentSelect.selectedIndex >= 0
+                ? departmentSelect.options[departmentSelect.selectedIndex].text
+                : dept;
+            const ok = window.confirm(
+              '임시저장본이 존재합니다.\n\n' +
+                '엑셀을 업로드하면 [' + deptLabel + ' / ' + ym + ']에 임시저장된 기존 내용이 모두 교체됩니다.\n' +
+                '(직접 입력해 둔 임시저장 내용도 사라집니다)\n\n계속하시겠습니까?'
+            );
+            if (!ok) {
+              e.preventDefault();
+              return;
+            }
+          }
+
+          if (uploadDeptField) uploadDeptField.value = dept;
+          if (uploadYmField) uploadYmField.value = ym;
         });
       }
     })();

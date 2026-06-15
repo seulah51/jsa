@@ -961,7 +961,9 @@ def new_plan():
                 row_errors.append(f"{idx}행: 업체명을 입력해 주세요.")
 
             contract_amount = None
-            if contract_amount_raw:
+            if not contract_amount_raw:
+                row_errors.append(f"{idx}행: 계약금액을 입력해 주세요.")
+            else:
                 try:
                     contract_amount = int(contract_amount_raw)
                     if contract_amount <= 0:
@@ -1179,6 +1181,14 @@ def new_plan():
                 d["remaining_amount"] = int(d["remaining_amount"])
             carry_over_plans.append(d)
 
+    # 임시저장(draft)이 존재하는 부서/월 목록 (엑셀 업로드 시 교체 확인창 노출 판단용)
+    with db_conn() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT DISTINCT department, year_month FROM fund_plans WHERE status = 'draft'"
+        )
+        draft_keys = [f"{d}|{ym}" for d, ym in cursor.fetchall()]
+
     # 부서 선택용 옵션: 활성 부서 + 표시 이름
     active_depts = get_active_departments()
     name_map = get_department_display_name_map()
@@ -1195,7 +1205,336 @@ def new_plan():
         register_deadline=register_deadline,
         check_deadline=check_deadline,
         is_register_deadline_over=is_register_deadline_over,
+        draft_keys=draft_keys,
     )
+
+
+# 엑셀 업로드/양식에서 사용하는 컬럼 헤더 (순서 유지)
+EXCEL_COLUMNS = ["업체명", "계약금액", "계획금액", "내용"]
+
+
+def _parse_excel_amount(value) -> int | None:
+    """엑셀 셀 값을 금액(정수)으로 변환한다. 비어 있으면 None, 형식 오류면 ValueError."""
+
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        # bool 은 int 의 하위 타입이라 명시적으로 거른다.
+        raise ValueError("숫자가 아닙니다.")
+    if isinstance(value, int):
+        return int(value)
+    if isinstance(value, float):
+        if value.is_integer():
+            return int(value)
+        raise ValueError("금액은 정수여야 합니다.")
+    # 문자열: 콤마/공백/'원' 등을 제거하고 정수로 변환
+    text = str(value).strip()
+    if not text:
+        return None
+    cleaned = text.replace(",", "").replace(" ", "").replace("원", "")
+    return int(cleaned)
+
+
+@app.route("/plans/template")
+def download_plan_template():
+    """각 부서에 배포할 자금계획 등록용 기본 엑셀(.xlsx) 양식을 다운로드한다."""
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "자금계획"
+
+    # 1행: 제목
+    ws.merge_cells("A1:D1")
+    title_cell = ws["A1"]
+    title_cell.value = "자금계획 등록 양식"
+    title_cell.font = Font(size=14, bold=True)
+    title_cell.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[1].height = 26
+
+    # 2행: 안내 문구
+    ws.merge_cells("A2:D2")
+    note_cell = ws["A2"]
+    note_cell.value = (
+        "※ 업체명·계약금액·계획금액은 필수, 내용은 선택입니다. "
+        "금액은 숫자만 입력하세요(콤마 자동 처리). "
+        "부서·계획월은 업로드 화면에서 선택합니다. 5행부터 입력(최대 200건)."
+    )
+    note_cell.font = Font(size=9, color="666666")
+    note_cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    ws.row_dimensions[2].height = 30
+
+    # 3행: 중요 안내 (등록 화면과 동일한 내용) — 노란 배경 강조
+    amber_fill = PatternFill(start_color="FEF3C7", end_color="FEF3C7", fill_type="solid")
+    ws.merge_cells("A3:D3")
+    warn_cell = ws["A3"]
+    warn_cell.value = (
+        "⚠️ 중요 — 엑셀 업로드는 계약금액이 해당 계획 월에 전액 지급되는 일시불 건, "
+        "또는 분납 건의 1차 지급분을 반영할 때만 사용하세요. "
+        "기존에 작성된 건 중 잔액이 남아 있는 경우에는 다음 달로 자동 이월되므로, "
+        "엑셀로 다시 등록하면 중복 작성될 수 있습니다."
+    )
+    warn_cell.font = Font(size=10, bold=True, color="92400E")
+    warn_cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    # 병합된 영역 전체에 배경색 적용
+    for col in range(1, 5):
+        ws.cell(row=3, column=col).fill = amber_fill
+    ws.row_dimensions[3].height = 50
+
+    # 4행: 컬럼 헤더
+    header_fill = PatternFill(start_color="4F46E5", end_color="4F46E5", fill_type="solid")
+    header_font = Font(color="FFFFFF", bold=True)
+    thin = Side(style="thin", color="CBD5E1")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    for col_idx, header in enumerate(EXCEL_COLUMNS, start=1):
+        cell = ws.cell(row=4, column=col_idx, value=header)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = border
+
+    # 컬럼 너비
+    widths = {"A": 24, "B": 18, "C": 18, "D": 40}
+    for col, width in widths.items():
+        ws.column_dimensions[col].width = width
+
+    # 입력 영역(빈 200행): 테두리 + 금액 열 콤마 서식
+    # 계약금액(2열)/계획금액(3열)은 숫자만 입력해도 천 단위 콤마로 표시되도록 한다.
+    money_align = Alignment(horizontal="right", vertical="center")
+    for r in range(5, 205):
+        for c in range(1, 5):
+            cell = ws.cell(row=r, column=c)
+            cell.border = border
+            if c in (2, 3):
+                cell.number_format = "#,##0"
+                cell.alignment = money_align
+
+    ws.freeze_panes = "A5"
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    response = Response(
+        output.getvalue(),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    response.headers["Content-Disposition"] = "attachment; filename=fund_plan_template.xlsx"
+    return response
+
+
+@app.route("/plans/upload", methods=["POST"])
+def upload_plan_excel():
+    """엑셀 파일을 업로드해 세부 자금계획을 임시저장(draft)으로 일괄 등록한다.
+
+    등록 후에는 등록 화면(new_plan)으로 이동해 내용을 검토한 뒤 최종 제출하도록 한다.
+    """
+
+    department = request.form.get("department", "").strip()
+    year_month = request.form.get("year_month", "").strip()
+
+    def back():
+        return redirect(url_for("new_plan", department=department, year_month=year_month))
+
+    if not department or not year_month:
+        flash("부서와 계획 월을 먼저 선택해 주세요.", "error")
+        return back()
+
+    upload = request.files.get("excel_file")
+    if upload is None or not upload.filename:
+        flash("업로드할 엑셀 파일을 선택해 주세요.", "error")
+        return back()
+
+    if not upload.filename.lower().endswith(".xlsx"):
+        flash("엑셀(.xlsx) 파일만 업로드할 수 있습니다.", "error")
+        return back()
+
+    # 마감일/마감여부 확인 (수동 등록과 동일한 규칙)
+    if not can_edit_plan_by_deadline(department, year_month):
+        flash("등록 마감일이 지나 계획을 등록할 수 없습니다.", "error")
+        return back()
+
+    with db_conn() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT MAX(CASE WHEN status = 'closed' THEN 1 ELSE 0 END)
+            FROM fund_plans
+            WHERE department = ? AND year_month = ?
+            """,
+            (department, year_month),
+        )
+        row = cursor.fetchone()
+        is_closed = bool(row[0]) if row and row[0] is not None else False
+    if is_closed:
+        flash("이미 마감된 계획입니다. 등록할 수 없습니다.", "error")
+        return back()
+
+    # 엑셀 파싱
+    from openpyxl import load_workbook
+
+    try:
+        wb = load_workbook(upload, read_only=True, data_only=True)
+    except Exception:  # noqa: BLE001
+        flash("엑셀 파일을 읽을 수 없습니다. 양식 파일이 맞는지 확인해 주세요.", "error")
+        return back()
+
+    ws = wb.active
+    all_rows = list(ws.iter_rows(values_only=True))
+    wb.close()
+
+    # 헤더 행 찾기: '업체명' 이 포함된 행을 헤더로 간주
+    header_row_idx = None
+    col_map: dict[str, int] = {}
+    for idx, cells in enumerate(all_rows):
+        normalized = [str(c).strip() if c is not None else "" for c in cells]
+        if "업체명" in normalized:
+            header_row_idx = idx
+            for col_idx, name in enumerate(normalized):
+                if name in EXCEL_COLUMNS:
+                    col_map[name] = col_idx
+            break
+
+    if header_row_idx is None or "업체명" not in col_map or "계획금액" not in col_map:
+        flash(
+            "엑셀 양식을 확인해 주세요. '업체명', '계획금액' 머리글이 있는 양식 파일이 필요합니다.",
+            "error",
+        )
+        return back()
+
+    errors: list[str] = []
+    rows_to_insert: list[tuple] = []
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    deadline_raw = f"{year_month}-12"
+    MAX_ROWS = 200
+
+    def cell_value(cells, name):
+        col = col_map.get(name)
+        if col is None or col >= len(cells):
+            return None
+        return cells[col]
+
+    for offset, cells in enumerate(all_rows[header_row_idx + 1:]):
+        excel_row_no = header_row_idx + 2 + offset  # 사용자에게 보여줄 실제 엑셀 행 번호
+
+        vendor_raw = cell_value(cells, "업체명")
+        contract_raw = cell_value(cells, "계약금액")
+        amount_raw = cell_value(cells, "계획금액")
+        desc_raw = cell_value(cells, "내용")
+
+        vendor_name = str(vendor_raw).strip() if vendor_raw is not None else ""
+        description = str(desc_raw).strip() if desc_raw is not None else ""
+
+        # 행 전체가 비어 있으면 건너뛴다.
+        if (
+            not vendor_name
+            and (contract_raw is None or str(contract_raw).strip() == "")
+            and (amount_raw is None or str(amount_raw).strip() == "")
+            and not description
+        ):
+            continue
+
+        if len(rows_to_insert) >= MAX_ROWS:
+            errors.append(f"한 번에 최대 {MAX_ROWS}건까지만 등록할 수 있습니다.")
+            break
+
+        row_errors: list[str] = []
+
+        if not vendor_name:
+            row_errors.append(f"{excel_row_no}행: 업체명을 입력해 주세요.")
+
+        contract_amount = None
+        try:
+            contract_amount = _parse_excel_amount(contract_raw)
+            if contract_amount is None:
+                row_errors.append(f"{excel_row_no}행: 계약금액을 입력해 주세요.")
+            elif contract_amount <= 0:
+                row_errors.append(f"{excel_row_no}행: 계약금액은 0보다 큰 숫자로 입력해 주세요.")
+        except (ValueError, TypeError):
+            row_errors.append(f"{excel_row_no}행: 계약금액은 숫자로 입력해 주세요.")
+
+        amount = None
+        try:
+            amount = _parse_excel_amount(amount_raw)
+            if amount is None:
+                row_errors.append(f"{excel_row_no}행: 계획금액을 입력해 주세요.")
+            elif amount <= 0:
+                row_errors.append(f"{excel_row_no}행: 계획금액은 0보다 큰 숫자로 입력해 주세요.")
+        except (ValueError, TypeError):
+            row_errors.append(f"{excel_row_no}행: 계획금액은 숫자로 입력해 주세요.")
+
+        if row_errors:
+            errors.extend(row_errors)
+            continue
+
+        rows_to_insert.append(
+            (
+                department,
+                year_month,
+                amount,
+                deadline_raw,
+                vendor_name,
+                description or None,
+                contract_amount,
+                0,  # registered_flag
+                0,  # carry_over
+                "draft",
+                now_str,
+            )
+        )
+
+    if errors:
+        # 오류가 너무 많으면 앞부분만 보여준다.
+        for msg in errors[:15]:
+            flash(msg, "error")
+        if len(errors) > 15:
+            flash(f"외 {len(errors) - 15}건의 오류가 더 있습니다.", "error")
+        return back()
+
+    if not rows_to_insert:
+        flash("엑셀에서 등록할 자금계획을 찾지 못했습니다. 내용을 입력했는지 확인해 주세요.", "error")
+        return back()
+
+    with db_conn() as conn:
+        cursor = conn.cursor()
+        # 수동 등록과 동일하게, 해당 부서/월의 기존 임시저장 건을 교체한다.
+        cursor.execute(
+            """
+            DELETE FROM fund_plans
+            WHERE department = ?
+              AND year_month = ?
+              AND status = 'draft'
+            """,
+            (department, year_month),
+        )
+        cursor.executemany(
+            """
+            INSERT INTO fund_plans (
+                department,
+                year_month,
+                amount,
+                deadline,
+                vendor_name,
+                description,
+                contract_amount,
+                registered_flag,
+                carry_over,
+                status,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows_to_insert,
+        )
+        conn.commit()
+
+    flash(
+        f"엑셀에서 {len(rows_to_insert)}건을 임시저장했습니다. 내용을 검토한 뒤 최종 제출해 주세요.",
+        "success",
+    )
+    return back()
 
 
 @app.route("/departments/<department>/<year_month>/close", methods=["POST"])

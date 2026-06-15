@@ -5,3 +5,7 @@ __pycache__/
 venv/
 .venv/
 .DS_Store
+
+# 로컬 확인 전용 (운영 배포와 무관)
+run_local.py
+.claude/
