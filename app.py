@@ -71,11 +71,15 @@ def db_conn() -> _Connection:
     return _Connection(psycopg2.connect(DATABASE_URL))
 
 DEPARTMENT_EMAILS = {
-    "개발품질팀": ["wjdtmfdk51@icams.co.kr"],
-    "금형개발팀": [],
+    "개발팀": ["wjdtmfdk51@icams.co.kr"],
     "상생협력팀": [],
     "생산기술팀": [],
     "생산팀": [],
+    "설계팀": [],
+    "양산품질팀": [],
+    "영업관리팀": [],
+    "자재관리팀": [],
+    "경영관리팀": [],
 }
 
 
