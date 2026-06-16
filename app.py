@@ -1140,10 +1140,15 @@ def new_plan():
                 END AS remaining_amount
             FROM fund_plans
             WHERE
-                (
+                -- 임시저장(미제출)은 이월 대상에서 제외한다.
+                status <> 'draft'
+                AND (
+                    -- 명시적으로 '이월' 체크된 건
                     carry_over = 1
+                    -- 또는 '등록여부(전표)'가 체크된 건 중 계약 잔액이 남은 건
                     OR (
-                        contract_amount IS NOT NULL
+                        registered_flag = 1
+                        AND contract_amount IS NOT NULL
                         AND contract_amount > 0
                         AND contract_amount > (
                             SELECT IFNULL(SUM(amount), 0)
