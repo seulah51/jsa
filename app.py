@@ -1192,13 +1192,22 @@ def new_plan():
                 d["remaining_amount"] = int(d["remaining_amount"])
             carry_over_plans.append(d)
 
-    # 임시저장(draft)이 존재하는 부서/월 목록 (엑셀 업로드 시 교체 확인창 노출 판단용)
+    # 부서/월별 기존 자금계획 상태(임시저장/최종제출/마감)를 화면 안내용으로 수집한다.
+    # (엑셀 업로드 교체 확인창 + 부서 선택 시 기존 건 안내에 사용)
+    draft_keys: list[str] = []
+    submitted_keys: list[str] = []
+    closed_keys: list[str] = []
     with db_conn() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT DISTINCT department, year_month FROM fund_plans WHERE status = 'draft'"
-        )
-        draft_keys = [f"{d}|{ym}" for d, ym in cursor.fetchall()]
+        cursor.execute("SELECT DISTINCT department, year_month, status FROM fund_plans")
+        for dept_row, ym_row, status_row in cursor.fetchall():
+            key = f"{dept_row}|{ym_row}"
+            if status_row == "draft":
+                draft_keys.append(key)
+            elif status_row == "submitted":
+                submitted_keys.append(key)
+            elif status_row == "closed":
+                closed_keys.append(key)
 
     # 부서 선택용 옵션: 활성 부서 + 표시 이름
     active_depts = get_active_departments()
@@ -1217,6 +1226,8 @@ def new_plan():
         check_deadline=check_deadline,
         is_register_deadline_over=is_register_deadline_over,
         draft_keys=draft_keys,
+        submitted_keys=submitted_keys,
+        closed_keys=closed_keys,
     )
 
 

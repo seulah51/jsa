@@ -138,6 +138,8 @@
       </div>
     </div>
 
+    <div id="existing-plan-notice" class="hidden mt-1 rounded-md border px-3 py-2 text-xs"></div>
+
     <div class="mt-4">
       <div class="mb-2 flex items-center justify-between">
         <div class="flex flex-col gap-0.5">
@@ -407,6 +409,34 @@
 
       // 임시저장(draft)이 존재하는 "부서|월" 목록 (엑셀 업로드 교체 확인창 노출 판단)
       const draftKeys = {{ draft_keys|tojson|safe }};
+      // 최종제출/마감된 "부서|월" 목록 (부서 선택 시 기존 건 안내용)
+      const submittedKeys = {{ submitted_keys|tojson|safe }};
+      const closedKeys = {{ closed_keys|tojson|safe }};
+      const existingNotice = document.getElementById('existing-plan-notice');
+
+      // 선택한 부서/월에 임시저장본·최종제출·마감 건이 있으면 안내 문구 표시
+      function updateExistingNotice() {
+        if (!existingNotice) return;
+        existingNotice.className = 'hidden mt-1 rounded-md border px-3 py-2 text-xs';
+        existingNotice.textContent = '';
+        const dept = departmentSelect ? departmentSelect.value : '';
+        const ym = monthInput ? monthInput.value : '';
+        if (!dept || !ym) return;
+        const key = dept + '|' + ym;
+        const deptLabel = (departmentSelect && departmentSelect.selectedIndex >= 0)
+          ? departmentSelect.options[departmentSelect.selectedIndex].text : dept;
+        const prefix = '[' + deptLabel + ' / ' + ym + '] ';
+        if (closedKeys.indexOf(key) !== -1) {
+          existingNotice.className = 'mt-1 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700';
+          existingNotice.textContent = '⚠️ ' + prefix + '이미 마감된 자금계획입니다. 새로 등록/수정할 수 없습니다.';
+        } else if (submittedKeys.indexOf(key) !== -1) {
+          existingNotice.className = 'mt-1 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800';
+          existingNotice.textContent = '⚠️ ' + prefix + '이미 최종제출된 자금계획이 있습니다. 중복 등록에 주의하세요. (이 화면에서 다시 최종제출하면 기존 제출 건에 더해집니다)';
+        } else if (draftKeys.indexOf(key) !== -1) {
+          existingNotice.className = 'mt-1 rounded-md border border-slate-300 bg-slate-50 px-3 py-2 text-xs text-slate-700';
+          existingNotice.textContent = 'ℹ️ ' + prefix + '임시저장본이 존재합니다. 오른쪽 "임시저장 불러오기"로 불러올 수 있습니다.';
+        }
+      }
 
       function applyCarryOver() {
         const dept = departmentSelect ? departmentSelect.value : '';
@@ -506,12 +536,18 @@
         });
       }
 
+      function onDeptOrMonthChange() {
+        applyCarryOver();        // 자동 이월(잔액/이월 건) 채우기 — 유지
+        updateExistingNotice();  // 기존 임시저장/최종제출/마감 건 안내
+      }
       if (departmentSelect) {
-        departmentSelect.addEventListener('change', applyCarryOver);
+        departmentSelect.addEventListener('change', onDeptOrMonthChange);
       }
       if (monthInput) {
-        monthInput.addEventListener('change', applyCarryOver);
+        monthInput.addEventListener('change', onDeptOrMonthChange);
       }
+      // 초기 1회 실행 (URL 파라미터로 부서/월이 미리 선택된 경우 안내 표시)
+      updateExistingNotice();
 
       // 폼 전송 전에 금액 입력에서 콤마 제거
       if (form) {
