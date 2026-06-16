@@ -755,6 +755,8 @@ def export_department_plans(department: str, year_month: str):
             WHERE department = ?
               AND year_month >= ?
               AND year_month <= ?
+              -- 마감(closed)되지 않은 달의 금액은 기간 합계에 반영하지 않는다.
+              AND status = 'closed'
             GROUP BY vendor_name, description, contract_amount, year_month
             ORDER BY vendor_name ASC, description ASC, contract_amount ASC, year_month ASC
             """,
