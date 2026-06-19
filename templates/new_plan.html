@@ -439,6 +439,8 @@
       }
 
       function applyCarryOver() {
+        // 마감/등록마감 지난 폼은 읽기 전용이므로 자동 채움하지 않는다.
+        if (isClosed || isEditDeadlineOver) return;
         const dept = departmentSelect ? departmentSelect.value : '';
         const ym = monthInput ? monthInput.value : '';
         if (!dept || !ym) {
@@ -490,10 +492,40 @@
           carryOverInfo.textContent = '이월 대상 기간: ' + minYm + ' ~ ' + maxYm + ' (선택 월 이전 잔액/이월 건)';
         }
 
-        candidates.forEach((plan, idx) => {
-          const i = idx + 1;
-          const row = document.querySelector('tr[data-row-index="' + i + '"]');
-          if (!row) return;
+        // 이미 채워진 행(업로드/임시저장 등)의 계약 키를 모아 중복 배치를 방지한다.
+        const filledKeys = new Set();
+        rows.forEach((row) => {
+          const idx = row.getAttribute('data-row-index');
+          const v = row.querySelector('input[name="vendor_name_' + idx + '"]');
+          if (v && v.value.trim()) {
+            const c = row.querySelector('input[name="contract_amount_' + idx + '"]');
+            const d = row.querySelector('input[name="description_' + idx + '"]');
+            const cv = c ? c.value.replace(/[^0-9]/g, '') : '';
+            filledKeys.add([v.value.trim(), (d ? d.value.trim() : ''), cv].join('||'));
+          }
+        });
+
+        // 기존에 없는 이월 후보만 골라 빈 행에 순서대로 채운다.
+        const toPlace = candidates.filter((plan) => {
+          const key = [plan.vendor_name || '', plan.description || '', String(plan.contract_amount || 0)].join('||');
+          return !filledKeys.has(key);
+        });
+
+        let cursor = 0; // rows 배열 인덱스
+        toPlace.forEach((plan) => {
+          // 다음 빈 행(업체명 미입력) 찾기
+          while (cursor < rows.length) {
+            const r = rows[cursor];
+            const ri = r.getAttribute('data-row-index');
+            const vi = r.querySelector('input[name="vendor_name_' + ri + '"]');
+            if (vi && !vi.value.trim()) break;
+            cursor += 1;
+          }
+          if (cursor >= rows.length) return; // 더 이상 빈 행 없음
+
+          const row = rows[cursor];
+          const i = row.getAttribute('data-row-index');
+          if (row.style.display === 'none') row.style.display = '';
 
           const vendorInput = row.querySelector('input[name="vendor_name_' + i + '"]');
           const contractInput = row.querySelector('input[name="contract_amount_' + i + '"]');
@@ -503,37 +535,27 @@
           const paidSpan = row.querySelector('.carry-paid');
           const remainingSpan = row.querySelector('.carry-remaining');
 
-          if (vendorInput && !vendorInput.value) {
-            vendorInput.value = plan.vendor_name || '';
-          }
-
+          if (vendorInput) vendorInput.value = plan.vendor_name || '';
           if (contractInput && plan.contract_amount != null) {
-            // 이월시 계약금액은 그대로 유지 (없다면 채워 넣기)
-            if (!contractInput.value) {
-              contractInput.value = formatNumberWithCommas(String(plan.contract_amount));
-            }
+            contractInput.value = formatNumberWithCommas(String(plan.contract_amount));
           }
+          // 이월된 건은 계획금액을 비워 담당자가 이번 달 금액을 입력하게 한다.
+          if (amountInput) amountInput.value = '';
+          if (descInput) descInput.value = plan.description || '';
 
-          if (amountInput) {
-            // 이월된 건은 계획금액을 0으로 두고 담당자가 다시 입력
-            amountInput.value = '';
-          }
-
-          if (descInput && !descInput.value) {
-            descInput.value = plan.description || '';
-          }
-
-          // 계약금액/remaining_amount가 있는 경우 요약 표시
           if (summaryDiv && paidSpan && remainingSpan && plan.contract_amount != null && plan.remaining_amount != null) {
             const contract = Number(plan.contract_amount) || 0;
             const remaining = Number(plan.remaining_amount) || 0;
             const paid = Math.max(contract - remaining, 0);
-
             paidSpan.textContent = formatNumberWithCommas(String(paid));
             remainingSpan.textContent = formatNumberWithCommas(String(remaining));
             summaryDiv.classList.remove('hidden');
           }
+          cursor += 1;
         });
+
+        updateRowNumbers();
+        updateAddRowButtonState();
       }
 
       function onDeptOrMonthChange() {
@@ -546,8 +568,9 @@
       if (monthInput) {
         monthInput.addEventListener('change', onDeptOrMonthChange);
       }
-      // 초기 1회 실행 (URL 파라미터로 부서/월이 미리 선택된 경우 안내 표시)
-      updateExistingNotice();
+      // 초기 1회 실행: 부서/월이 미리 선택된 경우(예: 엑셀 업로드/임시저장 불러오기 후)
+      // 이월 자동채움 + 기존 건 안내를 함께 적용한다.
+      onDeptOrMonthChange();
 
       // 폼 전송 전에 금액 입력에서 콤마 제거
       if (form) {
