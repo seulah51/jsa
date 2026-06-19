@@ -52,6 +52,13 @@
           </div>
           <button
             type="submit"
+            formaction="{{ url_for('set_month_deadline_route') }}"
+            class="inline-flex items-center rounded-md border border-indigo-300 bg-white px-3 py-1.5 text-xs font-medium text-indigo-700 shadow-sm hover:bg-indigo-50"
+          >
+            설정
+          </button>
+          <button
+            type="submit"
             class="inline-flex items-center rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-indigo-700"
           >
             알림 메일 발송

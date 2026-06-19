@@ -1879,6 +1879,46 @@ def send_department_notification():
         return redirect(url_for("index"))
 
 
+@app.route("/departments/set-deadline", methods=["POST"])
+def set_month_deadline_route():
+    """관리자 전용: 메일 발송 없이 등록/체크 마감 기한만 계획월에 저장한다."""
+
+    if not session.get("is_admin"):
+        flash("관리자 권한이 필요합니다.", "error")
+        return redirect(url_for("index"))
+
+    department = request.form.get("department", "").strip()
+    year_month = request.form.get("year_month", "").strip()
+    plan_deadline = request.form.get("plan_deadline", "").strip()
+    check_deadline = request.form.get("check_deadline", "").strip()
+
+    if not department or not year_month:
+        flash("부서와 계획 월을 모두 입력해 주세요.", "error")
+        return redirect(url_for("index"))
+
+    if not plan_deadline and not check_deadline:
+        flash("등록 마감일 또는 체크 마감일 중 하나 이상을 입력해 주세요.", "error")
+        return redirect(url_for("index"))
+
+    if department == "ALL":
+        targets = get_active_departments()
+    else:
+        targets = [department]
+
+    for dept in targets:
+        save_month_deadline(dept, year_month, plan_deadline or None, check_deadline or None)
+
+    name_map = get_department_display_name_map()
+    if department == "ALL":
+        flash(f"{len(targets)}개 부서에 {year_month} 마감 기한이 설정되었습니다.", "success")
+    else:
+        flash(
+            f"{name_map.get(department, department)} / {year_month} 마감 기한이 설정되었습니다.",
+            "success",
+        )
+    return redirect(url_for("index"))
+
+
 @app.route("/plans/<int:plan_id>/admin-delete", methods=["POST"])
 def admin_delete_plan(plan_id: int):
     if not session.get("is_admin"):
