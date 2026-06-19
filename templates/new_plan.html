@@ -179,7 +179,7 @@
                   <input
                     type="text"
                     name="vendor_name_{{ i }}"
-                    value="{{ row.vendor_name if row else '' }}"
+                    value="{{ (row.vendor_name or '') if row else '' }}"
                     class="block w-full rounded-md border border-slate-300 px-2 py-1 text-xs shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                     placeholder="예: ○○상사"
                   />
@@ -218,7 +218,7 @@
                   <input
                     type="text"
                     name="description_{{ i }}"
-                    value="{{ row.description if row else '' }}"
+                    value="{{ (row.description or '') if row else '' }}"
                     class="block w-full rounded-md border border-slate-300 px-2 py-1 text-xs shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                     placeholder="예: 설비투자, 프로젝트 A 선금 등"
                   />

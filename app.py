@@ -912,37 +912,44 @@ def new_plan():
         else:
             status = "draft"
 
-        errors = []
+        # 부서/계획월은 필수 (없으면 저장 자체가 불가)
+        if not department or not year_month:
+            if not department:
+                flash("부서를 입력해 주세요.", "error")
+            if not year_month:
+                flash("계획 월을 선택해 주세요.", "error")
+            return redirect(url_for("new_plan"))
 
-        if not department:
-            errors.append("부서를 입력해 주세요.")
+        # 등록 마감일/마감 여부 확인 (하드 블록)
+        if not can_edit_plan_by_deadline(department, year_month):
+            flash("등록 마감일이 지나 계획을 등록/수정할 수 없습니다.", "error")
+            return redirect(url_for("new_plan", department=department, year_month=year_month))
+        with db_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT MAX(CASE WHEN status = 'closed' THEN 1 ELSE 0 END)
+                FROM fund_plans
+                WHERE department = ? AND year_month = ?
+                """,
+                (department, year_month),
+            )
+            row = cursor.fetchone()
+            is_closed = bool(row[0]) if row and row[0] is not None else False
+        if is_closed:
+            flash("이미 마감된 계획입니다. 수정하거나 등록할 수 없습니다.", "error")
+            return redirect(url_for("new_plan", department=department, year_month=year_month))
 
-        if not year_month:
-            errors.append("계획 월을 선택해 주세요.")
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # UI 에서는 개별 행 기한을 받지 않으므로 계획 월 기준 기본값 사용 (예: YYYY-MM-12)
+        deadline_raw = f"{year_month}-12"
 
-        rows_to_insert = []
-
-        if department and year_month:
-            if not can_edit_plan_by_deadline(department, year_month):
-                flash("등록 마감일이 지나 계획을 등록/수정할 수 없습니다.", "error")
-                return redirect(url_for("new_plan", department=department, year_month=year_month))
-
-            # 마감된 월에 대해서는 더 이상 수정/등록 불가
-            with db_conn() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    SELECT MAX(CASE WHEN status = 'closed' THEN 1 ELSE 0 END)
-                    FROM fund_plans
-                    WHERE department = ? AND year_month = ?
-                    """,
-                    (department, year_month),
-                )
-                row = cursor.fetchone()
-                is_closed = bool(row[0]) if row and row[0] is not None else False
-            if is_closed:
-                flash("이미 마감된 계획입니다. 수정하거나 등록할 수 없습니다.", "error")
-                return redirect(url_for("new_plan", department=department, year_month=year_month))
+        # 입력 행 파싱:
+        #  - draft_rows : 검증 없이 입력값을 최대한 보존 (임시저장 + 제출 실패 시 보존용)
+        #  - submit_rows: 최종제출용 엄격 검증 통과 행
+        draft_rows: list[tuple] = []
+        submit_rows: list[tuple] = []
+        row_errors_all: list[str] = []
 
         for idx in range(1, 201):
             vendor_name = request.form.get(f"vendor_name_{idx}", "").strip()
@@ -961,105 +968,132 @@ def new_plan():
             ):
                 continue
 
-            row_errors = []
+            registered_flag = 1 if registered_flag_raw == "on" else 0
+            carry_over = 1 if carry_over_raw == "on" else 0
 
-            if not vendor_name:
-                row_errors.append(f"{idx}행: 업체명을 입력해 주세요.")
-
-            contract_amount = None
-            if not contract_amount_raw:
-                row_errors.append(f"{idx}행: 계약금액을 입력해 주세요.")
-            else:
+            # 보존용(관대) 파싱: 빈/오류 값은 기본값(계약금액 None, 계획금액 0)
+            lenient_contract = None
+            if contract_amount_raw:
                 try:
-                    contract_amount = int(contract_amount_raw)
-                    if contract_amount <= 0:
-                        row_errors.append(f"{idx}행: 계약금액은 0보다 큰 숫자로 입력해 주세요.")
+                    lenient_contract = int(contract_amount_raw)
                 except ValueError:
-                    row_errors.append(f"{idx}행: 계약금액은 숫자로 입력해 주세요.")
-
-            try:
-                amount = int(amount_raw)
-                if amount <= 0:
-                    row_errors.append(f"{idx}행: 계획금액은 0보다 큰 숫자로 입력해 주세요.")
-            except ValueError:
-                row_errors.append(f"{idx}행: 계획금액은 숫자로 입력해 주세요.")
-
-            if row_errors:
-                errors.extend(row_errors)
-            else:
-                registered_flag = 1 if registered_flag_raw == "on" else 0
-                carry_over = 1 if carry_over_raw == "on" else 0
-
-                now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-                # UI 에서는 개별 행의 기한을 입력받지 않으므로,
-                # 계획 월 기준으로 일괄 기본값을 설정한다 (예: YYYY-MM-12)
-                deadline_raw = f"{year_month}-12" if year_month else ""
-
-                # 현재 월 계획 행
-                rows_to_insert.append(
-                    (
-                        department,
-                        year_month,
-                        amount,
-                        deadline_raw,
-                        vendor_name,
-                        description,
-                        contract_amount,
-                        registered_flag,
-                        carry_over,
-                        status,
-                        now_str,
-                    )
-                )
-
-                # 이월 여부(carry_over)는 현재 행에만 저장한다.
-
-        if not rows_to_insert and not errors:
-            errors.append("입력된 계획이 없습니다. 한 행 이상 내용을 입력해 주세요.")
-
-        if errors:
-            for msg in errors:
-                flash(msg, "error")
-            return redirect(url_for("new_plan"))
-
-        with db_conn() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                DELETE FROM fund_plans
-                WHERE department = ?
-                  AND year_month = ?
-                  AND status = 'draft'
-                """,
-                (department, year_month),
-            )
-            cursor.executemany(
-                """
-                INSERT INTO fund_plans (
+                    lenient_contract = None
+            lenient_amount = 0
+            if amount_raw:
+                try:
+                    lenient_amount = int(amount_raw)
+                except ValueError:
+                    lenient_amount = 0
+            draft_rows.append(
+                (
                     department,
                     year_month,
-                    amount,
-                    deadline,
+                    lenient_amount,
+                    deadline_raw,
                     vendor_name,
                     description,
-                    contract_amount,
+                    lenient_contract,
                     registered_flag,
                     carry_over,
-                    status,
-                    created_at
+                    "draft",
+                    now_str,
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                rows_to_insert,
             )
 
-            conn.commit()
+            # 최종제출이면 엄격 검증
+            if action == "submit":
+                row_errors = []
+                if not vendor_name:
+                    row_errors.append(f"{idx}행: 업체명을 입력해 주세요.")
 
-        if status == "submitted":
+                contract_amount = None
+                if not contract_amount_raw:
+                    row_errors.append(f"{idx}행: 계약금액을 입력해 주세요.")
+                else:
+                    try:
+                        contract_amount = int(contract_amount_raw)
+                        if contract_amount <= 0:
+                            row_errors.append(f"{idx}행: 계약금액은 0보다 큰 숫자로 입력해 주세요.")
+                    except ValueError:
+                        row_errors.append(f"{idx}행: 계약금액은 숫자로 입력해 주세요.")
+
+                amount = None
+                if not amount_raw:
+                    row_errors.append(f"{idx}행: 계획금액을 입력해 주세요.")
+                else:
+                    try:
+                        amount = int(amount_raw)
+                        if amount <= 0:
+                            row_errors.append(f"{idx}행: 계획금액은 0보다 큰 숫자로 입력해 주세요.")
+                    except ValueError:
+                        row_errors.append(f"{idx}행: 계획금액은 숫자로 입력해 주세요.")
+
+                if row_errors:
+                    row_errors_all.extend(row_errors)
+                else:
+                    submit_rows.append(
+                        (
+                            department,
+                            year_month,
+                            amount,
+                            deadline_raw,
+                            vendor_name,
+                            description,
+                            contract_amount,
+                            registered_flag,
+                            carry_over,
+                            "submitted",
+                            now_str,
+                        )
+                    )
+
+        if not draft_rows:
+            flash("입력된 계획이 없습니다. 한 행 이상 내용을 입력해 주세요.", "error")
+            return redirect(url_for("new_plan", department=department, year_month=year_month))
+
+        def _replace_plans(rows_to_insert):
+            """해당 부서/월의 기존 임시저장을 지우고 새 행들로 교체한다."""
+            with db_conn() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    DELETE FROM fund_plans
+                    WHERE department = ? AND year_month = ? AND status = 'draft'
+                    """,
+                    (department, year_month),
+                )
+                cursor.executemany(
+                    """
+                    INSERT INTO fund_plans (
+                        department, year_month, amount, deadline, vendor_name, description,
+                        contract_amount, registered_flag, carry_over, status, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    rows_to_insert,
+                )
+                conn.commit()
+
+        if action == "submit":
+            if row_errors_all:
+                # 제출 실패: 입력 내용을 임시저장으로 보존 (데이터 유실 방지)
+                _replace_plans(draft_rows)
+                for msg in row_errors_all[:15]:
+                    flash(msg, "error")
+                if len(row_errors_all) > 15:
+                    flash(f"외 {len(row_errors_all) - 15}건의 오류가 더 있습니다.", "error")
+                flash(
+                    "오류가 있어 최종제출하지 못했습니다. 입력 내용은 임시저장해 두었으니 수정 후 다시 제출해 주세요.",
+                    "error",
+                )
+                return redirect(url_for("new_plan", department=department, year_month=year_month))
+            _replace_plans(submit_rows)
             flash("자금계획이 최종 제출되었습니다.", "success")
-        else:
-            flash("자금계획이 임시저장되었습니다.", "success")
+            return redirect(url_for("index"))
+
+        # 임시저장
+        _replace_plans(draft_rows)
+        flash("자금계획이 임시저장되었습니다. (검증 없이 입력값 그대로 저장)", "success")
         return redirect(url_for("index"))
 
     today = datetime.today()
