@@ -117,7 +117,17 @@
             <th class="px-4 py-2 whitespace-nowrap text-center font-medium text-slate-600">계약금액</th>
             <th class="px-4 py-2 whitespace-nowrap text-center font-medium text-slate-600">계획금액</th>
             <th class="px-6 py-2 whitespace-nowrap text-left font-medium text-slate-600">내용</th>
-            <th class="px-4 py-2 whitespace-nowrap text-center font-medium text-slate-600">등록여부</th>
+            <th class="px-4 py-2 whitespace-nowrap text-center font-medium text-slate-600">
+              <div class="flex items-center justify-center gap-1">
+                <input
+                  type="checkbox"
+                  id="select-all-registered"
+                  class="registered-select-all hidden h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                  title="등록여부 전체 선택"
+                />
+                <span>등록여부</span>
+              </div>
+            </th>
             <th class="px-4 py-2 whitespace-nowrap text-center font-medium text-slate-600">이월</th>
             <th class="px-4 py-2 whitespace-nowrap text-center font-medium text-slate-600">누적지급금액</th>
             <th class="px-4 py-2 whitespace-nowrap text-center font-medium text-slate-600">남은잔액</th>
@@ -306,6 +316,7 @@
       const registeredInputs = document.querySelectorAll(".registered-input");
       const carryoverViews = document.querySelectorAll(".carryover-view");
       const carryoverInputs = document.querySelectorAll(".carryover-input");
+      const registeredSelectAll = document.querySelectorAll(".registered-select-all");
 
       vendorTexts.forEach((el) => el.classList.toggle("hidden"));
       vendorInputs.forEach((el) => el.classList.toggle("hidden"));
@@ -316,6 +327,54 @@
       registeredInputs.forEach((el) => el.classList.toggle("hidden"));
       carryoverViews.forEach((el) => el.classList.toggle("hidden"));
       carryoverInputs.forEach((el) => el.classList.toggle("hidden"));
+      registeredSelectAll.forEach((el) => el.classList.toggle("hidden"));
+    }
+
+    // 등록여부/이월은 한 행에서 동시에 체크될 수 없다 (하나만 선택).
+    function enforceExclusive(changed) {
+      if (!changed.checked) return;
+      const tr = changed.closest('tr');
+      if (!tr) return;
+      const reg = tr.querySelector('.registered-input');
+      const carry = tr.querySelector('.carryover-input');
+      if (changed === reg && carry) carry.checked = false;
+      if (changed === carry && reg) reg.checked = false;
+    }
+
+    const selectAllReg = document.getElementById('select-all-registered');
+
+    function syncSelectAllRegistered() {
+      if (!selectAllReg) return;
+      const regs = Array.from(document.querySelectorAll('.registered-input')).filter((r) => !r.disabled);
+      if (!regs.length) return;
+      const allChecked = regs.every((r) => r.checked);
+      const noneChecked = regs.every((r) => !r.checked);
+      selectAllReg.checked = allChecked;
+      selectAllReg.indeterminate = !allChecked && !noneChecked;
+    }
+
+    document.querySelectorAll('.registered-input, .carryover-input').forEach((cb) => {
+      cb.addEventListener('change', function () {
+        enforceExclusive(this);
+        syncSelectAllRegistered();
+      });
+    });
+
+    // 등록여부 전체 선택: 모든 행의 등록여부를 일괄 토글 (체크 시 해당 행 이월은 해제)
+    if (selectAllReg) {
+      selectAllReg.addEventListener('change', function () {
+        const checked = this.checked;
+        document.querySelectorAll('.registered-input').forEach((reg) => {
+          if (reg.disabled) return;
+          reg.checked = checked;
+          if (checked) {
+            const tr = reg.closest('tr');
+            const carry = tr ? tr.querySelector('.carryover-input') : null;
+            if (carry) carry.checked = false;
+          }
+        });
+        this.indeterminate = false;
+      });
     }
 
     if ((isClosedDetail || isCheckDeadlineOver) && detailForm) {
