@@ -492,24 +492,51 @@
           carryOverInfo.textContent = '이월 대상 기간: ' + minYm + ' ~ ' + maxYm + ' (선택 월 이전 잔액/이월 건)';
         }
 
-        // 이미 채워진 행(업로드/임시저장 등)의 계약 키를 모아 중복 배치를 방지한다.
+        // 계약 키 생성기(업체명||내용||계약금액숫자) — 후보/행 비교에 동일하게 사용
+        const keyOf = (vendor, desc, contract) =>
+          [(vendor || '').trim(), (desc || '').trim(), String(contract == null ? '' : contract).replace(/[^0-9]/g, '')].join('||');
+
+        // 계약키 -> 이월 후보 매핑 (요약 표시용)
+        const candidateByKey = new Map();
+        candidates.forEach((plan) => {
+          candidateByKey.set(keyOf(plan.vendor_name, plan.description, plan.contract_amount), plan);
+        });
+
+        // 한 행에 이월 후보의 누적지급/남은잔액 요약을 표시한다.
+        function showCarrySummary(row, plan) {
+          const summaryDiv = row.querySelector('.carry-summary');
+          const paidSpan = row.querySelector('.carry-paid');
+          const remainingSpan = row.querySelector('.carry-remaining');
+          if (summaryDiv && paidSpan && remainingSpan && plan.contract_amount != null && plan.remaining_amount != null) {
+            const contract = Number(plan.contract_amount) || 0;
+            const remaining = Number(plan.remaining_amount) || 0;
+            const paid = Math.max(contract - remaining, 0);
+            paidSpan.textContent = formatNumberWithCommas(String(paid));
+            remainingSpan.textContent = formatNumberWithCommas(String(remaining));
+            summaryDiv.classList.remove('hidden');
+          }
+        }
+
+        // 이미 채워진 행(임시저장/업로드 등)을 훑어:
+        //  - 중복 배치 방지용 키 수집
+        //  - 이월 후보와 일치하면 그 행에도 누적지급/남은잔액 요약 표시
         const filledKeys = new Set();
         rows.forEach((row) => {
           const idx = row.getAttribute('data-row-index');
           const v = row.querySelector('input[name="vendor_name_' + idx + '"]');
-          if (v && v.value.trim()) {
-            const c = row.querySelector('input[name="contract_amount_' + idx + '"]');
-            const d = row.querySelector('input[name="description_' + idx + '"]');
-            const cv = c ? c.value.replace(/[^0-9]/g, '') : '';
-            filledKeys.add([v.value.trim(), (d ? d.value.trim() : ''), cv].join('||'));
-          }
+          if (!v || !v.value.trim()) return;
+          const c = row.querySelector('input[name="contract_amount_' + idx + '"]');
+          const d = row.querySelector('input[name="description_' + idx + '"]');
+          const key = keyOf(v.value, d ? d.value : '', c ? c.value : '');
+          filledKeys.add(key);
+          const cand = candidateByKey.get(key);
+          if (cand) showCarrySummary(row, cand);
         });
 
         // 기존에 없는 이월 후보만 골라 빈 행에 순서대로 채운다.
-        const toPlace = candidates.filter((plan) => {
-          const key = [plan.vendor_name || '', plan.description || '', String(plan.contract_amount || 0)].join('||');
-          return !filledKeys.has(key);
-        });
+        const toPlace = candidates.filter(
+          (plan) => !filledKeys.has(keyOf(plan.vendor_name, plan.description, plan.contract_amount)),
+        );
 
         let cursor = 0; // rows 배열 인덱스
         toPlace.forEach((plan) => {
@@ -531,9 +558,6 @@
           const contractInput = row.querySelector('input[name="contract_amount_' + i + '"]');
           const amountInput = row.querySelector('input[name="amount_' + i + '"]');
           const descInput = row.querySelector('input[name="description_' + i + '"]');
-          const summaryDiv = row.querySelector('.carry-summary');
-          const paidSpan = row.querySelector('.carry-paid');
-          const remainingSpan = row.querySelector('.carry-remaining');
 
           if (vendorInput) vendorInput.value = plan.vendor_name || '';
           if (contractInput && plan.contract_amount != null) {
@@ -542,15 +566,7 @@
           // 이월된 건은 계획금액을 비워 담당자가 이번 달 금액을 입력하게 한다.
           if (amountInput) amountInput.value = '';
           if (descInput) descInput.value = plan.description || '';
-
-          if (summaryDiv && paidSpan && remainingSpan && plan.contract_amount != null && plan.remaining_amount != null) {
-            const contract = Number(plan.contract_amount) || 0;
-            const remaining = Number(plan.remaining_amount) || 0;
-            const paid = Math.max(contract - remaining, 0);
-            paidSpan.textContent = formatNumberWithCommas(String(paid));
-            remainingSpan.textContent = formatNumberWithCommas(String(remaining));
-            summaryDiv.classList.remove('hidden');
-          }
+          showCarrySummary(row, plan);
           cursor += 1;
         });
 
