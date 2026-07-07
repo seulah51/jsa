@@ -153,14 +153,32 @@
                 />
               </td>
               <td class="px-4 py-2 whitespace-nowrap text-center tabular-nums text-slate-800">
-                {% if plan["contract_amount"] is not none %}
-                  {{ "{:,.0f}".format(plan["contract_amount"]) }} 원
+                {% if session.get('is_admin') %}
+                  <span class="contract-view">{% if plan["contract_amount"] is not none %}{{ "{:,.0f}".format(plan["contract_amount"]) }} 원{% else %}-{% endif %}</span>
+                  <input
+                    type="text"
+                    inputmode="numeric"
+                    name="contract_amount_{{ plan["id"] }}"
+                    value="{{ '{:,}'.format(plan["contract_amount"]) if plan["contract_amount"] is not none else '' }}"
+                    class="money-edit contract-input hidden w-28 rounded-md border border-slate-300 px-2 py-1 text-right text-xs shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
                 {% else %}
-                  -
+                  {% if plan["contract_amount"] is not none %}{{ "{:,.0f}".format(plan["contract_amount"]) }} 원{% else %}-{% endif %}
                 {% endif %}
               </td>
               <td class="px-4 py-2 whitespace-nowrap text-center tabular-nums text-slate-900">
-                {{ "{:,.0f}".format(plan["amount"]) }} 원
+                {% if session.get('is_admin') %}
+                  <span class="amount-view">{{ "{:,.0f}".format(plan["amount"]) }} 원</span>
+                  <input
+                    type="text"
+                    inputmode="numeric"
+                    name="amount_{{ plan["id"] }}"
+                    value="{{ '{:,}'.format(plan["amount"]) }}"
+                    class="money-edit amount-input hidden w-28 rounded-md border border-slate-300 px-2 py-1 text-right text-xs shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                {% else %}
+                  {{ "{:,.0f}".format(plan["amount"]) }} 원
+                {% endif %}
               </td>
               <td class="px-6 py-2 whitespace-nowrap text-left text-slate-800 text-sm">
                 <span class="desc-text">{{ plan["description"] or "" }}</span>
@@ -317,6 +335,11 @@
       const carryoverViews = document.querySelectorAll(".carryover-view");
       const carryoverInputs = document.querySelectorAll(".carryover-input");
       const registeredSelectAll = document.querySelectorAll(".registered-select-all");
+      // 계약금액/계획금액 (관리자 전용) — 요소가 없으면 빈 목록이라 무시됨
+      const contractViews = document.querySelectorAll(".contract-view");
+      const contractInputs = document.querySelectorAll(".contract-input");
+      const amountViews = document.querySelectorAll(".amount-view");
+      const amountInputs = document.querySelectorAll(".amount-input");
 
       vendorTexts.forEach((el) => el.classList.toggle("hidden"));
       vendorInputs.forEach((el) => el.classList.toggle("hidden"));
@@ -328,6 +351,10 @@
       carryoverViews.forEach((el) => el.classList.toggle("hidden"));
       carryoverInputs.forEach((el) => el.classList.toggle("hidden"));
       registeredSelectAll.forEach((el) => el.classList.toggle("hidden"));
+      contractViews.forEach((el) => el.classList.toggle("hidden"));
+      contractInputs.forEach((el) => el.classList.toggle("hidden"));
+      amountViews.forEach((el) => el.classList.toggle("hidden"));
+      amountInputs.forEach((el) => el.classList.toggle("hidden"));
     }
 
     // 등록여부/이월은 한 행에서 동시에 체크될 수 없다 (하나만 선택).
@@ -374,6 +401,24 @@
           }
         });
         this.indeterminate = false;
+      });
+    }
+
+    // 계약금액/계획금액(관리자 편집) 입력에 천 단위 콤마 표시, 전송 시 콤마 제거
+    function fmtCommas(v) {
+      const digits = String(v).replace(/[^0-9]/g, '');
+      return digits ? digits.replace(/\B(?=(\d{3})+(?!\d))/g, ',') : '';
+    }
+    document.querySelectorAll('.money-edit').forEach((input) => {
+      input.addEventListener('input', function () {
+        this.value = fmtCommas(this.value);
+      });
+    });
+    if (detailForm) {
+      detailForm.addEventListener('submit', function () {
+        detailForm.querySelectorAll('.money-edit').forEach((input) => {
+          input.value = input.value.replace(/[^0-9]/g, '');
+        });
       });
     }
 

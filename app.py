@@ -868,6 +868,8 @@ def update_plan_flags(department: str, year_month: str):
         )
         rows = cursor.fetchall()
 
+        is_admin = bool(session.get("is_admin"))
+
         for row in rows:
             plan_id = row["id"]
             prev_carry = row["carry_over"] or 0
@@ -878,25 +880,52 @@ def update_plan_flags(department: str, year_month: str):
             new_vendor_name = request.form.get(f"vendor_name_{plan_id}", "").strip() or None
             new_description = request.form.get(f"description_{plan_id}", "").strip() or None
 
+            # 계약금액/계획금액은 관리자만 수정 가능 (그 외에는 기존 값 유지)
+            new_contract = row["contract_amount"]
+            new_amount = row["amount"]
+            if is_admin:
+                contract_raw = request.form.get(f"contract_amount_{plan_id}", "").strip().replace(",", "")
+                amount_raw = request.form.get(f"amount_{plan_id}", "").strip().replace(",", "")
+                # 계약금액: 빈값이면 없음(None), 0보다 큰 정수면 반영, 그 외에는 기존 유지
+                if contract_raw == "":
+                    new_contract = None
+                else:
+                    try:
+                        parsed_contract = int(contract_raw)
+                        if parsed_contract > 0:
+                            new_contract = parsed_contract
+                    except ValueError:
+                        pass
+                # 계획금액: 0보다 큰 정수면 반영, 그 외에는 기존 유지 (NOT NULL)
+                try:
+                    parsed_amount = int(amount_raw)
+                    if parsed_amount > 0:
+                        new_amount = parsed_amount
+                except ValueError:
+                    pass
+
             # 값 변경 시 업데이트
             if (
                 new_registered != row["registered_flag"]
                 or new_carry != prev_carry
                 or new_vendor_name != row["vendor_name"]
                 or new_description != row["description"]
+                or new_contract != row["contract_amount"]
+                or new_amount != row["amount"]
             ):
                 cursor.execute(
                     """
                     UPDATE fund_plans
-                    SET registered_flag = ?, carry_over = ?, vendor_name = ?, description = ?
+                    SET registered_flag = ?, carry_over = ?, vendor_name = ?, description = ?,
+                        contract_amount = ?, amount = ?
                     WHERE id = ?
                     """,
-                    (new_registered, new_carry, new_vendor_name, new_description, plan_id),
+                    (new_registered, new_carry, new_vendor_name, new_description, new_contract, new_amount, plan_id),
                 )
 
         conn.commit()
 
-    flash("등록여부 및 이월 설정이 저장되었습니다.", "success")
+    flash("변경 내용이 저장되었습니다.", "success")
     return redirect(url_for("department_detail", department=department, year_month=year_month))
 
 
