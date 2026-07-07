@@ -332,14 +332,26 @@
         addRowBtn.disabled = !hasHiddenRow;
       }
 
-      // 행 추가 기능: 처음에는 5행만 보이고, 버튼을 누를 때마다 숨겨진 행을 하나씩 표시
+      // 초기 표시 행 수: 기본 5행. 단, 불러온 임시저장 등으로 내용이 채워진 행이
+      // 5개보다 많으면 채워진 마지막 행까지 모두 보이게 한다.
       function initializeRowVisibility() {
+        let lastFilled = 0;
         rows.forEach((row, idx) => {
-          if (idx < 5) {
-            row.style.display = '';
-          } else {
-            row.style.display = 'none';
-          }
+          const i = row.getAttribute('data-row-index');
+          const v = row.querySelector('input[name="vendor_name_' + i + '"]');
+          const c = row.querySelector('input[name="contract_amount_' + i + '"]');
+          const a = row.querySelector('input[name="amount_' + i + '"]');
+          const d = row.querySelector('input[name="description_' + i + '"]');
+          const hasContent =
+            (v && v.value.trim()) ||
+            (c && c.value.trim()) ||
+            (a && a.value.trim()) ||
+            (d && d.value.trim());
+          if (hasContent) lastFilled = idx + 1;
+        });
+        const showCount = Math.max(5, lastFilled);
+        rows.forEach((row, idx) => {
+          row.style.display = idx < showCount ? '' : 'none';
         });
         updateRowNumbers();
         updateAddRowButtonState();
