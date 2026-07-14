@@ -584,6 +584,8 @@ def export_department_plans(department: str, year_month: str):
 
     start_ym = request.args.get("start_ym", "").strip()
     end_ym = request.args.get("end_ym", "").strip()
+    # 관리자 전용: 전체 부서 다운로드 (scope=all)
+    all_scope = request.args.get("scope") == "all" and bool(session.get("is_admin"))
 
     # 기간 선택이 없거나, 시작/종료가 같은 한 달인 경우: 기존 단일 월 내보내기 로직 사용
     if not start_ym or not end_ym or start_ym == end_ym:
@@ -591,35 +593,62 @@ def export_department_plans(department: str, year_month: str):
         target_ym = start_ym or year_month
         with db_conn() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT id, department, year_month, amount, deadline, vendor_name, description, contract_amount, registered_flag, carry_over, created_at
-                FROM fund_plans
-                WHERE department = ? AND year_month = ?
-                ORDER BY deadline ASC, id DESC
-                """,
-                (department, target_ym),
-            )
+            if all_scope:
+                cursor.execute(
+                    """
+                    SELECT id, department, year_month, amount, deadline, vendor_name, description, contract_amount, registered_flag, carry_over, created_at
+                    FROM fund_plans
+                    WHERE year_month = ?
+                    ORDER BY department ASC, deadline ASC, id DESC
+                    """,
+                    (target_ym,),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT id, department, year_month, amount, deadline, vendor_name, description, contract_amount, registered_flag, carry_over, created_at
+                    FROM fund_plans
+                    WHERE department = ? AND year_month = ?
+                    ORDER BY deadline ASC, id DESC
+                    """,
+                    (department, target_ym),
+                )
             plans = cursor.fetchall()
 
-            cursor.execute(
-                """
-                SELECT vendor_name, description, contract_amount, SUM(amount) AS total_paid
-                FROM fund_plans
-                WHERE department = ?
-                  AND registered_flag = 1
-                  AND vendor_name IS NOT NULL
-                  AND description IS NOT NULL
-                  AND contract_amount IS NOT NULL
-                GROUP BY vendor_name, description, contract_amount
-                """,
-                (department,),
-            )
+            if all_scope:
+                cursor.execute(
+                    """
+                    SELECT department, vendor_name, description, contract_amount, SUM(amount) AS total_paid
+                    FROM fund_plans
+                    WHERE registered_flag = 1
+                      AND vendor_name IS NOT NULL
+                      AND description IS NOT NULL
+                      AND contract_amount IS NOT NULL
+                    GROUP BY department, vendor_name, description, contract_amount
+                    """,
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT vendor_name, description, contract_amount, SUM(amount) AS total_paid
+                    FROM fund_plans
+                    WHERE department = ?
+                      AND registered_flag = 1
+                      AND vendor_name IS NOT NULL
+                      AND description IS NOT NULL
+                      AND contract_amount IS NOT NULL
+                    GROUP BY vendor_name, description, contract_amount
+                    """,
+                    (department,),
+                )
             total_rows = cursor.fetchall()
 
-        totals_by_contract: dict[tuple[str, str, int], int] = {}
+        totals_by_contract: dict[tuple, int] = {}
         for row in total_rows:
-            key = (row["vendor_name"], row["description"], row["contract_amount"])
+            if all_scope:
+                key = (row["department"], row["vendor_name"], row["description"], row["contract_amount"])
+            else:
+                key = (row["vendor_name"], row["description"], row["contract_amount"])
             totals_by_contract[key] = row["total_paid"] or 0
 
         enriched_plans: list[dict] = []
@@ -629,7 +658,10 @@ def export_department_plans(department: str, year_month: str):
             total_paid = None
             remaining = None
             if contract_amount is not None:
-                key = (data.get("vendor_name"), data.get("description"), contract_amount)
+                if all_scope:
+                    key = (data.get("department"), data.get("vendor_name"), data.get("description"), contract_amount)
+                else:
+                    key = (data.get("vendor_name"), data.get("description"), contract_amount)
                 total_paid = totals_by_contract.get(key, 0)
                 remaining = contract_amount - total_paid
             data["total_paid"] = total_paid
@@ -712,7 +744,7 @@ def export_department_plans(department: str, year_month: str):
 
         csv_data = output.getvalue().encode("utf-8-sig")
         # HTTP 헤더 인코딩 문제를 피하기 위해 파일명은 ASCII 문자만 사용한다.
-        safe_department = "dept"
+        safe_department = "all_depts" if all_scope else "dept"
         filename = f"{target_ym}_{safe_department}_plans.csv"
         response = Response(csv_data, mimetype="text/csv")
         response.headers["Content-Disposition"] = f"attachment; filename={filename}"
@@ -743,55 +775,69 @@ def export_department_plans(department: str, year_month: str):
 
     with db_conn() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT
-                vendor_name,
-                description,
-                contract_amount,
-                year_month,
-                SUM(amount) AS total_amount
-            FROM fund_plans
-            WHERE department = ?
-              AND year_month >= ?
-              AND year_month <= ?
-              -- 마감(closed)되지 않은 달의 금액은 기간 합계에 반영하지 않는다.
-              AND status = 'closed'
-            GROUP BY vendor_name, description, contract_amount, year_month
-            ORDER BY vendor_name ASC, description ASC, contract_amount ASC, year_month ASC
-            """,
-            (department, months[0], months[-1]),
-        )
+        if all_scope:
+            cursor.execute(
+                """
+                SELECT
+                    department,
+                    vendor_name,
+                    description,
+                    contract_amount,
+                    year_month,
+                    SUM(amount) AS total_amount
+                FROM fund_plans
+                WHERE year_month >= ?
+                  AND year_month <= ?
+                  AND status = 'closed'
+                GROUP BY department, vendor_name, description, contract_amount, year_month
+                ORDER BY department ASC, vendor_name ASC, description ASC, contract_amount ASC, year_month ASC
+                """,
+                (months[0], months[-1]),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT
+                    vendor_name,
+                    description,
+                    contract_amount,
+                    year_month,
+                    SUM(amount) AS total_amount
+                FROM fund_plans
+                WHERE department = ?
+                  AND year_month >= ?
+                  AND year_month <= ?
+                  -- 마감(closed)되지 않은 달의 금액은 기간 합계에 반영하지 않는다.
+                  AND status = 'closed'
+                GROUP BY vendor_name, description, contract_amount, year_month
+                ORDER BY vendor_name ASC, description ASC, contract_amount ASC, year_month ASC
+                """,
+                (department, months[0], months[-1]),
+            )
         rows = cursor.fetchall()
 
-    # (업체명, 내용, 계약금액) 별로 월별 금액을 모은다.
+    # (부서,) 업체명, 내용, 계약금액 별로 월별 금액을 모은다.
     by_key: dict[tuple, dict[str, int]] = {}
     base_info: dict[tuple, tuple] = {}
     for row in rows:
-        key = (row["vendor_name"], row["description"], row["contract_amount"])
+        if all_scope:
+            key = (row["department"], row["vendor_name"], row["description"], row["contract_amount"])
+        else:
+            key = (row["vendor_name"], row["description"], row["contract_amount"])
         ym = row["year_month"]
         amount = row["total_amount"] or 0
         if key not in by_key:
             by_key[key] = {}
-            base_info[key] = (
-                row["vendor_name"],
-                row["description"],
-                row["contract_amount"],
-            )
+            base_info[key] = key
         by_key[key][ym] = by_key[key].get(ym, 0) + amount
 
     output = io.StringIO()
     writer = csv.writer(output)
-
-    # 첫 행: 부서명 / 표시이름
     name_map = get_department_display_name_map()
-    dept_display = name_map.get(department, department)
-    writer.writerow(["부서명", dept_display])
 
-    # 두 번째 행: 컬럼 헤더
+    # 월 컬럼 헤더 (M월)
     month_headers = []
     for ym in months:
-        # 컬럼 라벨은 M월 형태로 표시 (예: 1월, 2월 ...)
         try:
             dt = datetime.strptime(ym + "-01", "%Y-%m-%d")
             label = f"{dt.month}월"
@@ -799,33 +845,41 @@ def export_department_plans(department: str, year_month: str):
             label = ym
         month_headers.append(label)
 
-    header = ["업체명", "내용", "계약금액"] + month_headers
-    writer.writerow(header)
+    # 첫 행(부서명) + 컬럼 헤더 행
+    if all_scope:
+        writer.writerow(["부서명", "전체 부서"])
+        writer.writerow(["부서", "업체명", "내용", "계약금액"] + month_headers)
+    else:
+        writer.writerow(["부서명", name_map.get(department, department)])
+        writer.writerow(["업체명", "내용", "계약금액"] + month_headers)
 
     # 데이터 행
     for key, info in base_info.items():
-        vendor_name, description, contract_amount = info
-        month_values: list[int | str] = []
+        if all_scope:
+            dept_k, vendor_name, description, contract_amount = info
+            prefix = [name_map.get(dept_k, dept_k), vendor_name, description, contract_amount]
+        else:
+            vendor_name, description, contract_amount = info
+            prefix = [vendor_name, description, contract_amount]
         month_amounts = by_key.get(key, {})
-        for ym in months:
-            val = month_amounts.get(ym)
-            month_values.append(val or 0)
-
-        writer.writerow([vendor_name, description, contract_amount] + month_values)
+        month_values = [month_amounts.get(ym) or 0 for ym in months]
+        writer.writerow(prefix + month_values)
 
     # 컬럼(월)별 소계 행 추가
     month_totals: list[int] = []
     for ym in months:
         total = 0
-        for key in base_info.keys():
-            amounts = by_key.get(key, {})
-            total += amounts.get(ym, 0) or 0
+        for k in base_info.keys():
+            total += by_key.get(k, {}).get(ym, 0) or 0
         month_totals.append(total)
 
-    writer.writerow(["소계", "", ""] + month_totals)
+    if all_scope:
+        writer.writerow(["소계", "", "", ""] + month_totals)
+    else:
+        writer.writerow(["소계", "", ""] + month_totals)
 
     csv_data = output.getvalue().encode("utf-8-sig")
-    safe_department = "dept"
+    safe_department = "all_depts" if all_scope else "dept"
     filename = f"{start_ym}_to_{end_ym}_{safe_department}_plans.csv"
     response = Response(csv_data, mimetype="text/csv")
     response.headers["Content-Disposition"] = f"attachment; filename={filename}"
