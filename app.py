@@ -19,6 +19,9 @@ SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 SMTP_USE_TLS = os.environ.get("SMTP_USE_TLS", "0") == "1"
 FROM_EMAIL = os.environ.get("FROM_EMAIL", SMTP_USER)
 
+# 사내망 PC 메일 발송 프로그램(에이전트) 인증 토큰. 대기열 조회/완료 처리 보호에 사용.
+MAIL_AGENT_TOKEN = os.environ.get("MAIL_AGENT_TOKEN", "")
+
 
 def _translate(sql: str) -> str:
     """sqlite 스타일 SQL 을 PostgreSQL 스타일로 변환한다 (? -> %s, IFNULL -> COALESCE)."""
@@ -231,6 +234,25 @@ def save_month_deadline(
         conn.commit()
 
 
+def enqueue_mail(recipients: list[str], subject: str, body: str) -> None:
+    """사내 PC 발송 프로그램이 가져가 보낼 메일을 대기열(mail_outbox)에 등록한다."""
+    with db_conn() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO mail_outbox (recipients, subject, body, status, created_at)
+            VALUES (?, ?, ?, 'pending', ?)
+            """,
+            (
+                ",".join(recipients),
+                subject,
+                body,
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            ),
+        )
+        conn.commit()
+
+
 def can_edit_plan_by_deadline(department: str, year_month: str) -> bool:
     info = get_month_deadline(department, year_month)
     if not info:
@@ -320,6 +342,21 @@ def init_db() -> None:
                 register_deadline TEXT,
                 check_deadline TEXT,
                 PRIMARY KEY (department, year_month)
+            )
+            """
+        )
+        # 메일 발송 대기열: 웹은 여기에 등록만 하고, 사내 PC 발송 프로그램이 가져가 발송한다.
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS mail_outbox (
+                id SERIAL PRIMARY KEY,
+                recipients TEXT NOT NULL,
+                subject TEXT NOT NULL,
+                body TEXT NOT NULL,
+                status TEXT DEFAULT 'pending',
+                error TEXT,
+                created_at TEXT NOT NULL,
+                sent_at TEXT
             )
             """
         )
@@ -1826,27 +1863,12 @@ def send_department_notification():
     db_settings = get_department_email_settings()
     name_map = get_department_display_name_map()
 
-    if not SMTP_HOST or not SMTP_USER or not SMTP_PASSWORD:
-        flash("메일 서버 설정이 되어 있지 않습니다. SMTP_HOST / SMTP_USER / SMTP_PASSWORD 환경변수를 확인해 주세요.", "error")
-        return redirect(url_for("index"))
-
-    # send_fire_check_mail.py 방식으로 메일 발송
-    from email.mime.text import MIMEText
-
+    # 실제 SMTP 발송은 사내망 PC의 발송 프로그램이 담당한다.
+    # 여기서는 발송 내용을 대기열(mail_outbox)에 등록만 한다.
     if department == "ALL":
         # 전체 부서 선택 시 각 부서별로 개별 메일 발송
         active_depts = get_active_departments()
         sent_count = 0
-        failed_depts = []
-        
-        # 전체 발송 시 SMTP 연결을 한 번만 열어 재사용한다.
-        # (부서마다 새로 접속/로그인하면 느려서 워커 타임아웃(502)이 발생함)
-        try:
-            server = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20)
-            server.login(SMTP_USER, SMTP_PASSWORD)
-        except Exception as e:  # noqa: BLE001
-            flash(f"메일 서버 연결에 실패했습니다: {e}", "error")
-            return redirect(url_for("index"))
 
         for dept in active_depts:
             # 각 부서의 마감일 저장
@@ -1908,30 +1930,18 @@ def send_department_notification():
             ])
             body = "\n".join(body_lines)
             
-            # 부서별 메일 발송
-            msg = MIMEText(body, _charset="utf-8")
-            msg["Subject"] = subject
-            msg["From"] = FROM_EMAIL or SMTP_USER
-            msg["To"] = ", ".join(recipients)
+            # 발송 대기열(mail_outbox)에 등록 — 실제 발송은 PC 발송 프로그램이 수행한다.
+            enqueue_mail(recipients, subject, body)
+            sent_count += 1
 
-            try:
-                server.sendmail(FROM_EMAIL or SMTP_USER, recipients, msg.as_string())
-                sent_count += 1
-            except Exception as e:  # noqa: BLE001
-                failed_depts.append(f"{dept_display}({e})")
-
-        # 재사용한 SMTP 연결 종료
-        try:
-            server.quit()
-        except Exception:  # noqa: BLE001
-            pass
-        
-        if failed_depts:
-            flash(f"일부 부서 메일 발송 실패: {', '.join(failed_depts)}", "error")
         if sent_count > 0:
-            flash(f"{sent_count}개 부서에 메일 알림이 발송되었습니다.", "success")
+            flash(
+                f"{sent_count}개 부서 메일이 발송 대기열에 등록되었습니다. "
+                "PC의 메일 발송 프로그램이 실행 중이면 곧 발송됩니다.",
+                "success",
+            )
         else:
-            flash("메일을 발송할 부서가 없습니다.", "error")
+            flash("발송할 수신자가 설정된 부서가 없습니다.", "error")
         return redirect(url_for("index"))
     else:
         # 개별 부서 선택 시
@@ -1992,21 +2002,52 @@ def send_department_notification():
         ])
         body = "\n".join(body_lines)
         
-        msg = MIMEText(body, _charset="utf-8")
-        msg["Subject"] = subject
-        msg["From"] = FROM_EMAIL or SMTP_USER
-        msg["To"] = ", ".join(recipients)
-
-        try:
-            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
-                server.login(SMTP_USER, SMTP_PASSWORD)
-                server.sendmail(FROM_EMAIL or SMTP_USER, recipients, msg.as_string())
-        except Exception as e:  # noqa: BLE001
-            flash(f"메일 발송 중 오류가 발생했습니다: {e}", "error")
-            return redirect(url_for("index"))
-
-        flash("부서 메일 알림이 발송되었습니다.", "success")
+        # 발송 대기열(mail_outbox)에 등록 — 실제 발송은 PC 발송 프로그램이 수행한다.
+        enqueue_mail(recipients, subject, body)
+        flash(
+            "메일이 발송 대기열에 등록되었습니다. PC의 메일 발송 프로그램이 실행 중이면 곧 발송됩니다.",
+            "success",
+        )
         return redirect(url_for("index"))
+
+
+@app.route("/mail/outbox/pending")
+def mail_outbox_pending():
+    """PC 발송 프로그램 전용: 발송 대기(pending) 메일 목록 반환 (토큰 필요)."""
+    if not MAIL_AGENT_TOKEN or request.args.get("token") != MAIL_AGENT_TOKEN:
+        return ("unauthorized", 401)
+    with db_conn() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, recipients, subject, body
+            FROM mail_outbox
+            WHERE status = 'pending'
+            ORDER BY id ASC
+            LIMIT 50
+            """
+        )
+        jobs = [dict(row) for row in cursor.fetchall()]
+    return {"jobs": jobs}
+
+
+@app.route("/mail/outbox/<int:job_id>/done", methods=["POST"])
+def mail_outbox_done(job_id: int):
+    """PC 발송 프로그램 전용: 발송 결과 기록 (토큰 필요)."""
+    if not MAIL_AGENT_TOKEN or request.args.get("token") != MAIL_AGENT_TOKEN:
+        return ("unauthorized", 401)
+    status = request.form.get("status", "sent")
+    if status not in ("sent", "failed"):
+        status = "sent"
+    error = request.form.get("error", "").strip() or None
+    with db_conn() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE mail_outbox SET status = ?, error = ?, sent_at = ? WHERE id = ?",
+            (status, error, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), job_id),
+        )
+        conn.commit()
+    return {"ok": True}
 
 
 @app.route("/departments/set-deadline", methods=["POST"])
