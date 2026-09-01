@@ -23,6 +23,7 @@ import time
 import urllib.parse
 import urllib.request
 from email.mime.text import MIMEText
+from email.utils import formatdate, make_msgid
 
 # ===== 설정 (환경변수 우선, 없으면 아래 기본값 사용) =====
 BASE_URL = os.environ.get("JSA_BASE_URL", "https://jsa-production-6ccc.up.railway.app")
@@ -81,6 +82,10 @@ def _send_batch(jobs):
             msg["Subject"] = job.get("subject") or ""
             msg["From"] = FROM_EMAIL
             msg["To"] = ", ".join(recipients)
+            # 정상 메일 헤더 (스팸/위조 오탐 방지)
+            msg["Date"] = formatdate(localtime=True)
+            _dom = FROM_EMAIL.split("@", 1)[1] if "@" in FROM_EMAIL else None
+            msg["Message-ID"] = make_msgid(domain=_dom)
             try:
                 server.sendmail(FROM_EMAIL, recipients, msg.as_string())
                 _report(job_id, "sent")
