@@ -9,3 +9,6 @@ venv/
 # 로컬 확인 전용 (운영 배포와 무관)
 run_local.py
 .claude/
+
+# 메일 발송 프로그램 실행 배치 (비밀번호 포함 - 커밋 금지)
+start_mail_agent.bat
