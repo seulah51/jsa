@@ -1861,13 +1861,6 @@ def send_department_notification():
     db_settings = get_department_email_settings()
     name_map = get_department_display_name_map()
 
-    if not SMTP_HOST or not SMTP_USER or not SMTP_PASSWORD:
-        flash("메일 서버 설정이 되어 있지 않습니다. SMTP_HOST / SMTP_USER / SMTP_PASSWORD 환경변수를 확인해 주세요.", "error")
-        return redirect(url_for("index"))
-
-    from email.mime.text import MIMEText
-    from email.utils import formatdate, make_msgid
-
     try:
         ym_dt = datetime.strptime(year_month, "%Y-%m")
         year_month_kr = f"{ym_dt.year}년 {ym_dt.month}월"
@@ -1897,9 +1890,10 @@ def send_department_notification():
         lines.extend(["", "감사합니다."])
         return subject, "\n".join(lines)
 
-    # 대상 부서 결정 + 마감일 저장 + 수신자 수집
+    # 회사 메일서버는 사내망에서만 발송 가능하므로, 웹은 대기열(mail_outbox)에 등록만 하고
+    # 사내 PC의 발송 프로그램(mail_agent.py)이 가져가 실제 발송한다.
     targets = get_active_departments() if department == "ALL" else [department]
-    to_send = []  # (dept_display, recipients, subject, body)
+    queued = 0
     for dept in targets:
         save_month_deadline(dept, year_month, plan_deadline or None, check_deadline or None)
         recipients = db_settings.get(dept) if dept in db_settings else DEPARTMENT_EMAILS.get(dept, [])
@@ -1907,47 +1901,17 @@ def send_department_notification():
         if not recipients:
             continue
         subject, body = _build(dept)
-        to_send.append((name_map.get(dept, dept), recipients, subject, body))
+        enqueue_mail(recipients, subject, body)
+        queued += 1
 
-    if not to_send:
+    if queued > 0:
+        flash(
+            f"{queued}개 부서 메일이 발송 대기열에 등록되었습니다. "
+            "PC의 메일 발송 프로그램이 실행 중이면 곧 발송됩니다.",
+            "success",
+        )
+    else:
         flash("발송할 수신자가 설정된 부서가 없습니다.", "error")
-        return redirect(url_for("index"))
-
-    # SMTP 연결을 한 번만 열어 재사용 (587 STARTTLS + 인증)
-    try:
-        server = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30)
-        if SMTP_USE_TLS:
-            server.starttls()
-        server.login(SMTP_USER, SMTP_PASSWORD)
-    except Exception as e:  # noqa: BLE001
-        flash(f"메일 서버 연결에 실패했습니다: {e}", "error")
-        return redirect(url_for("index"))
-
-    from_addr = FROM_EMAIL or SMTP_USER
-    _dom = from_addr.split("@", 1)[1] if "@" in from_addr else None
-    sent_count = 0
-    failed = []
-    for dept_display, recipients, subject, body in to_send:
-        msg = MIMEText(body, _charset="utf-8")
-        msg["Subject"] = subject
-        msg["From"] = from_addr
-        msg["To"] = ", ".join(recipients)
-        msg["Date"] = formatdate(localtime=True)
-        msg["Message-ID"] = make_msgid(domain=_dom)
-        try:
-            server.sendmail(from_addr, recipients, msg.as_string())
-            sent_count += 1
-        except Exception as e:  # noqa: BLE001
-            failed.append(f"{dept_display}({e})")
-    try:
-        server.quit()
-    except Exception:  # noqa: BLE001
-        pass
-
-    if failed:
-        flash(f"일부 부서 메일 발송 실패: {', '.join(failed)}", "error")
-    if sent_count > 0:
-        flash(f"{sent_count}개 부서에 메일이 발송되었습니다.", "success")
     return redirect(url_for("index"))
 
 
