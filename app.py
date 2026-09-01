@@ -1839,6 +1839,15 @@ def send_department_notification():
         sent_count = 0
         failed_depts = []
         
+        # 전체 발송 시 SMTP 연결을 한 번만 열어 재사용한다.
+        # (부서마다 새로 접속/로그인하면 느려서 워커 타임아웃(502)이 발생함)
+        try:
+            server = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20)
+            server.login(SMTP_USER, SMTP_PASSWORD)
+        except Exception as e:  # noqa: BLE001
+            flash(f"메일 서버 연결에 실패했습니다: {e}", "error")
+            return redirect(url_for("index"))
+
         for dept in active_depts:
             # 각 부서의 마감일 저장
             save_month_deadline(dept, year_month, plan_deadline or None, check_deadline or None)
@@ -1906,12 +1915,16 @@ def send_department_notification():
             msg["To"] = ", ".join(recipients)
 
             try:
-                with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-                    server.login(SMTP_USER, SMTP_PASSWORD)
-                    server.sendmail(FROM_EMAIL or SMTP_USER, recipients, msg.as_string())
+                server.sendmail(FROM_EMAIL or SMTP_USER, recipients, msg.as_string())
                 sent_count += 1
             except Exception as e:  # noqa: BLE001
                 failed_depts.append(f"{dept_display}({e})")
+
+        # 재사용한 SMTP 연결 종료
+        try:
+            server.quit()
+        except Exception:  # noqa: BLE001
+            pass
         
         if failed_depts:
             flash(f"일부 부서 메일 발송 실패: {', '.join(failed_depts)}", "error")
@@ -1985,7 +1998,7 @@ def send_department_notification():
         msg["To"] = ", ".join(recipients)
 
         try:
-            with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
                 server.login(SMTP_USER, SMTP_PASSWORD)
                 server.sendmail(FROM_EMAIL or SMTP_USER, recipients, msg.as_string())
         except Exception as e:  # noqa: BLE001
