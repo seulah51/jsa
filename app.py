@@ -1854,161 +1854,101 @@ def send_department_notification():
         flash("부서와 계획 월을 모두 입력해 주세요.", "error")
         return redirect(url_for("index"))
 
-    # 등록 마감, 체크 마감은 둘 중 하나만 있어도 발송 가능
     if not plan_deadline and not check_deadline:
         flash("자금계획 등록 마감일 또는 체크 마감일 중 하나 이상을 입력해 주세요.", "error")
         return redirect(url_for("index"))
 
-    # DB 에 저장된 부서별 메일 설정을 우선 사용하고, 없으면 코드 상의 기본값을 사용한다.
     db_settings = get_department_email_settings()
     name_map = get_department_display_name_map()
 
-    # 실제 SMTP 발송은 사내망 PC의 발송 프로그램이 담당한다.
-    # 여기서는 발송 내용을 대기열(mail_outbox)에 등록만 한다.
-    if department == "ALL":
-        # 전체 부서 선택 시 각 부서별로 개별 메일 발송
-        active_depts = get_active_departments()
-        sent_count = 0
-
-        for dept in active_depts:
-            # 각 부서의 마감일 저장
-            save_month_deadline(dept, year_month, plan_deadline or None, check_deadline or None)
-            
-            # 각 부서의 수신자 목록 가져오기
-            if dept in db_settings:
-                recipients = db_settings.get(dept, [])
-            else:
-                recipients = DEPARTMENT_EMAILS.get(dept, [])
-            recipients = [addr for addr in recipients if addr]
-            
-            if not recipients:
-                continue
-            
-            # 부서별 표시 이름 가져오기
-            dept_display = name_map.get(dept, dept)
-            
-            # 부서별 메일 제목 및 본문 생성
-            subject = f"[{dept_display}] {year_month} 자금계획 등록/체크 요청"
-            
-            # year_month를 "YYYY년 MM월" 형식으로 변환
-            try:
-                ym_dt = datetime.strptime(year_month, "%Y-%m")
-                year_month_kr = f"{ym_dt.year}년 {ym_dt.month}월"
-            except:
-                year_month_kr = year_month
-            
-            # 날짜를 "YYYY년 MM월 DD일" 형식으로 변환하는 함수
-            def format_date_kr(date_str):
-                try:
-                    dt = datetime.strptime(date_str, "%Y-%m-%d")
-                    return f"{dt.year}년 {dt.month}월 {dt.day}일"
-                except:
-                    return date_str
-            
-            body_lines = [
-                f"안녕하세요. {dept_display} 자금계획 담당자님.",
-                "",
-                f"{year_month_kr} 기준",
-                "",
-            ]
-
-            if plan_deadline:
-                plan_deadline_kr = format_date_kr(plan_deadline)
-                body_lines.append(
-                    f"1. 자금계획 시스템 등록기한은 {plan_deadline_kr}입니다."
-                )
-
-            if check_deadline:
-                check_deadline_kr = format_date_kr(check_deadline)
-                body_lines.append(
-                    f"2. 제출된 자금계획의 '등록여부(전표)' 및 '이월' 체크 기한은 {check_deadline_kr}입니다."
-                )
-
-            body_lines.extend([
-                "",
-                "감사합니다.",
-            ])
-            body = "\n".join(body_lines)
-            
-            # 발송 대기열(mail_outbox)에 등록 — 실제 발송은 PC 발송 프로그램이 수행한다.
-            enqueue_mail(recipients, subject, body)
-            sent_count += 1
-
-        if sent_count > 0:
-            flash(
-                f"{sent_count}개 부서 메일이 발송 대기열에 등록되었습니다. "
-                "PC의 메일 발송 프로그램이 실행 중이면 곧 발송됩니다.",
-                "success",
-            )
-        else:
-            flash("발송할 수신자가 설정된 부서가 없습니다.", "error")
+    if not SMTP_HOST or not SMTP_USER or not SMTP_PASSWORD:
+        flash("메일 서버 설정이 되어 있지 않습니다. SMTP_HOST / SMTP_USER / SMTP_PASSWORD 환경변수를 확인해 주세요.", "error")
         return redirect(url_for("index"))
-    else:
-        # 개별 부서 선택 시
-        if department in db_settings:
-            recipients = db_settings.get(department, [])
-        else:
-            recipients = DEPARTMENT_EMAILS.get(department, [])
-        recipients = [addr for addr in recipients if addr]
-        
-        if not recipients:
-            flash("선택한 대상에 설정된 메일 수신자가 없습니다.", "error")
-            return redirect(url_for("index"))
-        
-        save_month_deadline(department, year_month, plan_deadline or None, check_deadline or None)
-        
-        # 부서 표시 이름 가져오기
-        dept_display = name_map.get(department, department)
-        
-        subject = f"[{dept_display}] {year_month} 자금계획 등록/체크 요청"
-        
-        # year_month를 "YYYY년 MM월" 형식으로 변환
+
+    from email.mime.text import MIMEText
+    from email.utils import formatdate, make_msgid
+
+    try:
+        ym_dt = datetime.strptime(year_month, "%Y-%m")
+        year_month_kr = f"{ym_dt.year}년 {ym_dt.month}월"
+    except Exception:  # noqa: BLE001
+        year_month_kr = year_month
+
+    def _fmt(date_str):
         try:
-            ym_dt = datetime.strptime(year_month, "%Y-%m")
-            year_month_kr = f"{ym_dt.year}년 {ym_dt.month}월"
-        except:
-            year_month_kr = year_month
-        
-        # 날짜를 "YYYY년 MM월 DD일" 형식으로 변환하는 함수
-        def format_date_kr(date_str):
-            try:
-                dt = datetime.strptime(date_str, "%Y-%m-%d")
-                return f"{dt.year}년 {dt.month}월 {dt.day}일"
-            except:
-                return date_str
-        
-        body_lines = [
+            dt = datetime.strptime(date_str, "%Y-%m-%d")
+            return f"{dt.year}년 {dt.month}월 {dt.day}일"
+        except Exception:  # noqa: BLE001
+            return date_str
+
+    def _build(dept_key):
+        dept_display = name_map.get(dept_key, dept_key)
+        subject = f"[{dept_display}] {year_month} 자금계획 등록/체크 요청"
+        lines = [
             f"안녕하세요. {dept_display} 자금계획 담당자님.",
             "",
             f"{year_month_kr} 기준",
             "",
         ]
-
         if plan_deadline:
-            plan_deadline_kr = format_date_kr(plan_deadline)
-            body_lines.append(
-                f"1. 자금계획 시스템 등록기한은 {plan_deadline_kr}입니다."
-            )
-
+            lines.append(f"1. 자금계획 시스템 등록기한은 {_fmt(plan_deadline)}입니다.")
         if check_deadline:
-            check_deadline_kr = format_date_kr(check_deadline)
-            body_lines.append(
-                f"2. 제출된 자금계획의 '등록여부(전표)' 및 '이월' 체크 기한은 {check_deadline_kr}입니다."
-            )
+            lines.append(f"2. 제출된 자금계획의 '등록여부(전표)' 및 '이월' 체크 기한은 {_fmt(check_deadline)}입니다.")
+        lines.extend(["", "감사합니다."])
+        return subject, "\n".join(lines)
 
-        body_lines.extend([
-            "",
-            "감사합니다.",
-        ])
-        body = "\n".join(body_lines)
-        
-        # 발송 대기열(mail_outbox)에 등록 — 실제 발송은 PC 발송 프로그램이 수행한다.
-        enqueue_mail(recipients, subject, body)
-        flash(
-            "메일이 발송 대기열에 등록되었습니다. PC의 메일 발송 프로그램이 실행 중이면 곧 발송됩니다.",
-            "success",
-        )
+    # 대상 부서 결정 + 마감일 저장 + 수신자 수집
+    targets = get_active_departments() if department == "ALL" else [department]
+    to_send = []  # (dept_display, recipients, subject, body)
+    for dept in targets:
+        save_month_deadline(dept, year_month, plan_deadline or None, check_deadline or None)
+        recipients = db_settings.get(dept) if dept in db_settings else DEPARTMENT_EMAILS.get(dept, [])
+        recipients = [addr for addr in (recipients or []) if addr]
+        if not recipients:
+            continue
+        subject, body = _build(dept)
+        to_send.append((name_map.get(dept, dept), recipients, subject, body))
+
+    if not to_send:
+        flash("발송할 수신자가 설정된 부서가 없습니다.", "error")
         return redirect(url_for("index"))
+
+    # SMTP 연결을 한 번만 열어 재사용 (587 STARTTLS + 인증)
+    try:
+        server = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30)
+        if SMTP_USE_TLS:
+            server.starttls()
+        server.login(SMTP_USER, SMTP_PASSWORD)
+    except Exception as e:  # noqa: BLE001
+        flash(f"메일 서버 연결에 실패했습니다: {e}", "error")
+        return redirect(url_for("index"))
+
+    from_addr = FROM_EMAIL or SMTP_USER
+    _dom = from_addr.split("@", 1)[1] if "@" in from_addr else None
+    sent_count = 0
+    failed = []
+    for dept_display, recipients, subject, body in to_send:
+        msg = MIMEText(body, _charset="utf-8")
+        msg["Subject"] = subject
+        msg["From"] = from_addr
+        msg["To"] = ", ".join(recipients)
+        msg["Date"] = formatdate(localtime=True)
+        msg["Message-ID"] = make_msgid(domain=_dom)
+        try:
+            server.sendmail(from_addr, recipients, msg.as_string())
+            sent_count += 1
+        except Exception as e:  # noqa: BLE001
+            failed.append(f"{dept_display}({e})")
+    try:
+        server.quit()
+    except Exception:  # noqa: BLE001
+        pass
+
+    if failed:
+        flash(f"일부 부서 메일 발송 실패: {', '.join(failed)}", "error")
+    if sent_count > 0:
+        flash(f"{sent_count}개 부서에 메일이 발송되었습니다.", "success")
+    return redirect(url_for("index"))
 
 
 @app.route("/mail/outbox/pending")
