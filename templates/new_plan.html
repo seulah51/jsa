@@ -467,11 +467,11 @@
           (p) => p.department === dept && p.year_month < ym,
         );
 
-        // 같은 계약(업체명 + 내용 + 계약금액)에 대해 여러 달에 걸쳐 존재하는 경우,
-        // 가장 최근 year_month 하나만 남기도록 중복 제거한다.
+        // 같은 계약(업체명 + 계약금액)에 대해 여러 달/단계에 걸쳐 존재하는 경우,
+        // 가장 최근 year_month 하나만 남기도록 중복 제거한다. (내용은 단계별로 달라지므로 키에서 제외)
         const byContract = new Map();
         rawCandidates.forEach((p) => {
-          const key = [p.vendor_name || '', p.description || '', p.contract_amount || 0].join('||');
+          const key = [p.vendor_name || '', p.contract_amount || 0].join('||');
           const existing = byContract.get(key);
           if (!existing || existing.year_month < p.year_month) {
             byContract.set(key, p);
@@ -505,8 +505,9 @@
         }
 
         // 계약 키 생성기(업체명||내용||계약금액숫자) — 후보/행 비교에 동일하게 사용
+        // 계약 식별 키: 업체명 + 계약금액 (내용은 계약금/중도금 등 단계별로 달라지므로 제외)
         const keyOf = (vendor, desc, contract) =>
-          [(vendor || '').trim(), (desc || '').trim(), String(contract == null ? '' : contract).replace(/[^0-9]/g, '')].join('||');
+          [(vendor || '').trim(), String(contract == null ? '' : contract).replace(/[^0-9]/g, '')].join('||');
 
         // 계약키 -> 이월 후보 매핑 (요약 표시용)
         const candidateByKey = new Map();

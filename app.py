@@ -512,17 +512,17 @@ def department_detail(department: str, year_month: str):
         )
         plans = cursor.fetchall()
 
-        # 같은 계약(업체명+내용+계약금액) 기준으로 "실제 지급된 금액" 합계를 구해 남은 잔액 계산
+        # 같은 계약(업체명+계약금액) 기준으로 "실제 지급된 금액" 합계를 구해 남은 잔액 계산.
+        # (내용은 계약금/중도금 등 결제 단계별로 달라지므로 계약 식별 키에서 제외)
         cursor.execute(
             """
-            SELECT vendor_name, description, contract_amount, SUM(amount) AS total_paid
+            SELECT vendor_name, contract_amount, SUM(amount) AS total_paid
             FROM fund_plans
             WHERE department = ?
               AND registered_flag = 1
               AND vendor_name IS NOT NULL
-              AND description IS NOT NULL
               AND contract_amount IS NOT NULL
-            GROUP BY vendor_name, description, contract_amount
+            GROUP BY vendor_name, contract_amount
             """,
             (department,),
         )
@@ -542,7 +542,7 @@ def department_detail(department: str, year_month: str):
 
         totals_by_contract = {}
         for row in total_rows:
-            key = (row["vendor_name"], row["description"], row["contract_amount"])
+            key = (row["vendor_name"], row["contract_amount"])
             totals_by_contract[key] = row["total_paid"] or 0
 
     enriched_plans = []
@@ -552,7 +552,7 @@ def department_detail(department: str, year_month: str):
         total_paid = None
         remaining = None
         if contract_amount is not None:
-            key = (data.get("vendor_name"), data.get("description"), contract_amount)
+            key = (data.get("vendor_name"), contract_amount)
             total_paid = totals_by_contract.get(key, 0)
             remaining = contract_amount - total_paid
         data["total_paid"] = total_paid
@@ -655,26 +655,24 @@ def export_department_plans(department: str, year_month: str):
             if all_scope:
                 cursor.execute(
                     """
-                    SELECT department, vendor_name, description, contract_amount, SUM(amount) AS total_paid
+                    SELECT department, vendor_name, contract_amount, SUM(amount) AS total_paid
                     FROM fund_plans
                     WHERE registered_flag = 1
                       AND vendor_name IS NOT NULL
-                      AND description IS NOT NULL
                       AND contract_amount IS NOT NULL
-                    GROUP BY department, vendor_name, description, contract_amount
+                    GROUP BY department, vendor_name, contract_amount
                     """,
                 )
             else:
                 cursor.execute(
                     """
-                    SELECT vendor_name, description, contract_amount, SUM(amount) AS total_paid
+                    SELECT vendor_name, contract_amount, SUM(amount) AS total_paid
                     FROM fund_plans
                     WHERE department = ?
                       AND registered_flag = 1
                       AND vendor_name IS NOT NULL
-                      AND description IS NOT NULL
                       AND contract_amount IS NOT NULL
-                    GROUP BY vendor_name, description, contract_amount
+                    GROUP BY vendor_name, contract_amount
                     """,
                     (department,),
                 )
@@ -683,9 +681,9 @@ def export_department_plans(department: str, year_month: str):
         totals_by_contract: dict[tuple, int] = {}
         for row in total_rows:
             if all_scope:
-                key = (row["department"], row["vendor_name"], row["description"], row["contract_amount"])
+                key = (row["department"], row["vendor_name"], row["contract_amount"])
             else:
-                key = (row["vendor_name"], row["description"], row["contract_amount"])
+                key = (row["vendor_name"], row["contract_amount"])
             totals_by_contract[key] = row["total_paid"] or 0
 
         enriched_plans: list[dict] = []
@@ -696,9 +694,9 @@ def export_department_plans(department: str, year_month: str):
             remaining = None
             if contract_amount is not None:
                 if all_scope:
-                    key = (data.get("department"), data.get("vendor_name"), data.get("description"), contract_amount)
+                    key = (data.get("department"), data.get("vendor_name"), contract_amount)
                 else:
-                    key = (data.get("vendor_name"), data.get("description"), contract_amount)
+                    key = (data.get("vendor_name"), contract_amount)
                 total_paid = totals_by_contract.get(key, 0)
                 remaining = contract_amount - total_paid
             data["total_paid"] = total_paid
@@ -1288,7 +1286,6 @@ def new_plan():
                             WHERE
                                 fp2.department = fund_plans.department
                                 AND fp2.vendor_name = fund_plans.vendor_name
-                                AND fp2.description = fund_plans.description
                                 AND fp2.contract_amount = fund_plans.contract_amount
                                 AND fp2.registered_flag = 1
                         )
@@ -1312,7 +1309,6 @@ def new_plan():
                             WHERE
                                 fp2.department = fund_plans.department
                                 AND fp2.vendor_name = fund_plans.vendor_name
-                                AND fp2.description = fund_plans.description
                                 AND fp2.contract_amount = fund_plans.contract_amount
                                 AND fp2.registered_flag = 1
                         )
@@ -1327,7 +1323,6 @@ def new_plan():
                                 WHERE
                                     fp2.department = fund_plans.department
                                     AND fp2.vendor_name = fund_plans.vendor_name
-                                    AND fp2.description = fund_plans.description
                                     AND fp2.contract_amount = fund_plans.contract_amount
                                     AND fp2.registered_flag = 1
                             )
