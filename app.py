@@ -402,12 +402,12 @@ def get_department_summaries(selected_department: str | None = None):
                 MAX(CASE WHEN status = 'closed' THEN 1 ELSE 0 END) AS has_closed,
                 MAX(CASE WHEN status = 'draft' THEN 1 ELSE 0 END) AS has_draft,
                 MAX(CASE WHEN status = 'submitted' THEN 1 ELSE 0 END) AS has_submitted,
-                MAX(
+                MIN(
                     CASE
                         WHEN registered_flag = 1 OR carry_over = 1 THEN 1
                         ELSE 0
                     END
-                ) AS has_checked
+                ) AS all_checked
             FROM fund_plans
         """
 
@@ -429,7 +429,8 @@ def get_department_summaries(selected_department: str | None = None):
         d = dict(row)
         if d.get("has_closed"):
             d["status_label"] = "마감"
-        elif d.get("has_checked"):
+        elif d.get("has_submitted") and d.get("all_checked"):
+            # 제출된 달의 모든 건이 등록여부/이월 체크된 경우에만 체크완료
             d["status_label"] = "체크완료"
         elif d.get("has_submitted"):
             d["status_label"] = "제출완료"
