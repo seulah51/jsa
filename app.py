@@ -930,6 +930,9 @@ def update_plan_flags(department: str, year_month: str):
         flash("체크 마감일이 지나 등록여부 및 이월을 수정할 수 없습니다.", "error")
         return redirect(url_for("department_detail", department=department, year_month=year_month))
 
+    # save: 수정 내용만 저장 / submit: 저장 + 임시저장(draft) 건을 제출완료로 전환
+    action = request.form.get("action", "save")
+
     with db_conn() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -1013,9 +1016,23 @@ def update_plan_flags(department: str, year_month: str):
                     (new_registered, new_carry, new_vendor_name, new_description, new_contract, new_amount, plan_id),
                 )
 
+        # 최종제출: 이 부서/월의 임시저장 건을 제출완료로 전환
+        if action == "submit":
+            cursor.execute(
+                """
+                UPDATE fund_plans
+                SET status = 'submitted'
+                WHERE department = ? AND year_month = ? AND status = 'draft'
+                """,
+                (department, year_month),
+            )
+
         conn.commit()
 
-    flash("변경 내용이 저장되었습니다.", "success")
+    if action == "submit":
+        flash("최종제출되었습니다. (임시저장 건이 제출완료로 전환됨)", "success")
+    else:
+        flash("변경 내용이 저장되었습니다.", "success")
     return redirect(url_for("department_detail", department=department, year_month=year_month))
 
 

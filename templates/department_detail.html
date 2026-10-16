@@ -304,9 +304,20 @@
           </button>
           <button
             type="submit"
-            class="inline-flex items-center rounded-md bg-indigo-600 px-4 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700"
+            name="action"
+            value="save"
+            class="inline-flex items-center rounded-md border border-slate-300 bg-white px-4 py-1.5 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
           >
             저장
+          </button>
+          <button
+            type="submit"
+            name="action"
+            value="submit"
+            onclick="return confirm('최종제출 하시겠습니까?\n임시저장(미제출) 상태인 건이 제출완료로 전환됩니다.');"
+            class="inline-flex items-center rounded-md bg-indigo-600 px-4 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700"
+          >
+            최종제출
           </button>
         {% else %}
           {% if is_closed %}
