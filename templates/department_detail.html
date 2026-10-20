@@ -118,6 +118,7 @@
       <table class="min-w-full divide-y divide-slate-200 text-sm">
         <thead class="bg-slate-50">
           <tr>
+            <th class="px-3 py-2 whitespace-nowrap text-center font-medium text-slate-500 w-10">NO</th>
             <th class="px-4 py-2 whitespace-nowrap text-center font-medium text-slate-600">계획 월</th>
             <th class="px-4 py-2 whitespace-nowrap text-center font-medium text-slate-600">업체명</th>
             <th class="px-4 py-2 whitespace-nowrap text-center font-medium text-slate-600">계약금액</th>
@@ -146,6 +147,9 @@
         <tbody class="divide-y divide-slate-100 bg-white">
           {% for plan in plans %}
             <tr>
+              <td class="px-3 py-2 whitespace-nowrap text-center text-xs text-slate-400 w-10">
+                {{ loop.index }}
+              </td>
               <td class="px-4 py-2 whitespace-nowrap text-center text-slate-800">
                 {{ plan["year_month"] }}
               </td>
@@ -256,6 +260,7 @@
         </tbody>
         <tfoot class="bg-slate-50 border-t border-slate-200">
           <tr>
+            <td class="px-3 py-2 whitespace-nowrap text-center text-slate-800 w-10"></td>
             <td class="px-4 py-2 whitespace-nowrap text-center text-slate-800"></td>
             <td class="px-4 py-2 whitespace-nowrap text-center font-semibold text-slate-900">소계</td>
             <td class="px-4 py-2 whitespace-nowrap text-center tabular-nums font-semibold text-slate-900">
