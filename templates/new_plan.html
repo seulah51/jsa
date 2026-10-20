@@ -443,7 +443,7 @@
           existingNotice.textContent = '⚠️ ' + prefix + '이미 마감된 자금계획입니다. 새로 등록/수정할 수 없습니다.';
         } else if (submittedKeys.indexOf(key) !== -1) {
           existingNotice.className = 'mt-1 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800';
-          existingNotice.textContent = '⚠️ ' + prefix + '이미 최종제출된 자금계획이 있습니다. 중복 등록에 주의하세요. (이 화면에서 다시 최종제출하면 기존 제출 건에 더해집니다)';
+          existingNotice.textContent = '⚠️ ' + prefix + '이미 최종제출된 달입니다. 기존 제출 건은 여기 표시되지 않으며, 추가할 건만 입력 후 제출하면 기존 건에 더해집니다. (중복 입력 주의)';
         } else if (draftKeys.indexOf(key) !== -1) {
           existingNotice.className = 'mt-1 rounded-md border border-slate-300 bg-slate-50 px-3 py-2 text-xs text-slate-700';
           existingNotice.textContent = 'ℹ️ ' + prefix + '임시저장본이 존재합니다. 오른쪽 "임시저장 불러오기"로 불러올 수 있습니다.';
@@ -456,6 +456,16 @@
         const dept = departmentSelect ? departmentSelect.value : '';
         const ym = monthInput ? monthInput.value : '';
         if (!dept || !ym) {
+          if (carryOverInfo) {
+            carryOverInfo.textContent = '';
+          }
+          return;
+        }
+
+        // 이미 최종제출(submitted)/마감(closed)된 달이면 이월 자동채움을 하지 않는다.
+        // (추가할 건만 깔끔하게 입력하도록 — 이월은 달을 처음 만들 때 이미 반영됨)
+        const curKey = dept + '|' + ym;
+        if (submittedKeys.indexOf(curKey) !== -1 || closedKeys.indexOf(curKey) !== -1) {
           if (carryOverInfo) {
             carryOverInfo.textContent = '';
           }
