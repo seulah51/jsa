@@ -592,6 +592,9 @@ def department_detail(department: str, year_month: str):
             is_check_deadline_over = today > check_deadline
         except Exception:  # noqa: BLE001
             is_check_deadline_over = False
+    # 관리자는 체크 마감일과 무관하게 수정 가능 (잠금 해제)
+    if session.get("is_admin"):
+        is_check_deadline_over = False
     return render_template(
         "department_detail.html",
         department=department,
@@ -926,7 +929,8 @@ def export_department_plans(department: str, year_month: str):
 def update_plan_flags(department: str, year_month: str):
     """세부내역 화면에서 등록여부/이월 플래그를 수정한다 (마감된 월은 수정 불가)."""
 
-    if not can_check_or_carry_by_deadline(department, year_month):
+    # 관리자는 체크 마감일과 무관하게 수정 가능
+    if not session.get("is_admin") and not can_check_or_carry_by_deadline(department, year_month):
         flash("체크 마감일이 지나 등록여부 및 이월을 수정할 수 없습니다.", "error")
         return redirect(url_for("department_detail", department=department, year_month=year_month))
 
@@ -1056,8 +1060,8 @@ def new_plan():
                 flash("계획 월을 선택해 주세요.", "error")
             return redirect(url_for("new_plan"))
 
-        # 등록 마감일/마감 여부 확인 (하드 블록)
-        if not can_edit_plan_by_deadline(department, year_month):
+        # 등록 마감일 확인 (관리자는 마감일과 무관하게 등록/수정 가능)
+        if not session.get("is_admin") and not can_edit_plan_by_deadline(department, year_month):
             flash("등록 마감일이 지나 계획을 등록/수정할 수 없습니다.", "error")
             return redirect(url_for("new_plan", department=department, year_month=year_month))
         with db_conn() as conn:
@@ -1282,6 +1286,10 @@ def new_plan():
                 is_register_deadline_over = today_str > register_deadline
             except Exception:  # noqa: BLE001
                 is_register_deadline_over = False
+
+    # 관리자는 등록 마감일과 무관하게 등록/수정 가능 (잠금 해제)
+    if session.get("is_admin"):
+        is_register_deadline_over = False
 
     # 이월 표시된 계획 + 잔액이 남아있는 계약의 계획들을 불러와서,
     # 화면에서 선택한 부서/계획 월 기준으로 필터링해 사용한다.
@@ -1540,8 +1548,8 @@ def upload_plan_excel():
         flash("엑셀(.xlsx) 파일만 업로드할 수 있습니다.", "error")
         return back()
 
-    # 마감일/마감여부 확인 (수동 등록과 동일한 규칙)
-    if not can_edit_plan_by_deadline(department, year_month):
+    # 등록 마감일 확인 (관리자는 마감일과 무관하게 업로드 가능)
+    if not session.get("is_admin") and not can_edit_plan_by_deadline(department, year_month):
         flash("등록 마감일이 지나 계획을 등록할 수 없습니다.", "error")
         return back()
 
