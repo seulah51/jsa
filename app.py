@@ -360,6 +360,19 @@ def init_db() -> None:
             )
             """
         )
+        # 이월 중단(완료) 계약: 잔액이 남아 있어도 다음 달 이월 후보에서 제외한다.
+        # 계약 식별 = 부서 + 업체명 + 계약금액
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS carry_stopped (
+                department TEXT NOT NULL,
+                vendor_name TEXT NOT NULL,
+                contract_amount BIGINT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (department, vendor_name, contract_amount)
+            )
+            """
+        )
         conn.commit()
 
 
@@ -1321,6 +1334,13 @@ def new_plan():
             WHERE
                 -- 임시저장(미제출)은 이월 대상에서 제외한다.
                 status <> 'draft'
+                -- 이월 중단(완료) 처리된 계약은 제외한다.
+                AND NOT EXISTS (
+                    SELECT 1 FROM carry_stopped AS cs
+                    WHERE cs.department = fund_plans.department
+                      AND cs.vendor_name = fund_plans.vendor_name
+                      AND cs.contract_amount = fund_plans.contract_amount
+                )
                 AND (
                     -- 명시적으로 '이월' 체크된 건
                     carry_over = 1
@@ -1384,6 +1404,15 @@ def new_plan():
             elif status_row == "closed":
                 closed_keys.append(key)
 
+        # 이월 중단(완료) 계약 목록 (화면에서 해제할 수 있도록 표시)
+        cursor.execute(
+            "SELECT department, vendor_name, contract_amount FROM carry_stopped ORDER BY department, vendor_name"
+        )
+        carry_stopped_list = [
+            {"department": r[0], "vendor_name": r[1], "contract_amount": int(r[2])}
+            for r in cursor.fetchall()
+        ]
+
     # 부서 선택용 옵션: 활성 부서 + 표시 이름
     active_depts = get_active_departments()
     name_map = get_department_display_name_map()
@@ -1403,6 +1432,7 @@ def new_plan():
         draft_keys=draft_keys,
         submitted_keys=submitted_keys,
         closed_keys=closed_keys,
+        carry_stopped_list=carry_stopped_list,
     )
 
 
@@ -1934,6 +1964,44 @@ def send_department_notification():
     else:
         flash("발송할 수신자가 설정된 부서가 없습니다.", "error")
     return redirect(url_for("index"))
+
+
+@app.route("/departments/<department>/carry-stop", methods=["POST"])
+def carry_stop(department: str):
+    """계약(업체명+계약금액)의 이월을 중단(action=stop)하거나 다시 허용(action=resume)한다."""
+
+    vendor_name = request.form.get("vendor_name", "").strip()
+    contract_raw = request.form.get("contract_amount", "").replace(",", "").strip()
+    action = request.form.get("action", "stop")
+
+    if not vendor_name:
+        return {"ok": False, "error": "업체명이 없습니다."}, 400
+    try:
+        contract_amount = int(contract_raw)
+    except ValueError:
+        return {"ok": False, "error": "계약금액이 올바르지 않습니다."}, 400
+
+    with db_conn() as conn:
+        cursor = conn.cursor()
+        if action == "resume":
+            cursor.execute(
+                """
+                DELETE FROM carry_stopped
+                WHERE department = ? AND vendor_name = ? AND contract_amount = ?
+                """,
+                (department, vendor_name, contract_amount),
+            )
+        else:
+            cursor.execute(
+                """
+                INSERT INTO carry_stopped (department, vendor_name, contract_amount, created_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT (department, vendor_name, contract_amount) DO NOTHING
+                """,
+                (department, vendor_name, contract_amount, datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+            )
+        conn.commit()
+    return {"ok": True}
 
 
 @app.route("/mail/outbox/pending")

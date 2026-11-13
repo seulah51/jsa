@@ -145,6 +145,7 @@
         <div class="flex flex-col gap-0.5">
           <h3 class="text-sm font-medium text-slate-800">세부 자금계획 (최대 200건)</h3>
           <p id="carry-over-info" class="text-[11px] text-slate-500"></p>
+          <div id="carry-stopped-info" class="hidden text-[11px] text-slate-600"></div>
         </div>
         <div class="flex items-center gap-2">
           <p class="text-xs text-slate-500">업체명·계약금액·계획금액은 필수입니다. 비어 있는 행은 자동으로 무시됩니다.</p>
@@ -227,12 +228,21 @@
                   </div>
                 </td>
                 <td class="px-3 py-2 text-center align-middle">
-                  <button
-                    type="button"
-                    class="delete-row-btn inline-flex items-center rounded-md border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-600 shadow-sm hover:bg-slate-50"
-                  >
-                    삭제
-                  </button>
+                  <div class="flex flex-col items-center gap-1">
+                    <button
+                      type="button"
+                      class="delete-row-btn inline-flex items-center rounded-md border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-600 shadow-sm hover:bg-slate-50"
+                    >
+                      삭제
+                    </button>
+                    <button
+                      type="button"
+                      class="carry-stop-btn hidden inline-flex items-center whitespace-nowrap rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-700 shadow-sm hover:bg-amber-100"
+                      title="이 계약을 완료 처리하여 다음 달부터 이월하지 않습니다"
+                    >
+                      이월중단
+                    </button>
+                  </div>
                 </td>
               </tr>
             {% endfor %}
@@ -371,25 +381,66 @@
       // 초기 행 표시 상태 적용
       initializeRowVisibility();
 
-      // 행 삭제 기능: 해당 행의 모든 입력 값을 초기화 후 행 숨기기 및 번호 재정렬
+      // 행 비우기: 입력값 초기화 + 이월 표시/버튼 해제 + 행 숨기기 및 번호 재정렬
+      function clearRow(row) {
+        row.querySelectorAll('input').forEach((input) => {
+          input.value = '';
+        });
+        const summaryDiv = row.querySelector('.carry-summary');
+        if (summaryDiv && !summaryDiv.classList.contains('hidden')) {
+          summaryDiv.classList.add('hidden');
+        }
+        const stopBtn = row.querySelector('.carry-stop-btn');
+        if (stopBtn) stopBtn.classList.add('hidden');
+        delete row.dataset.carryVendor;
+        delete row.dataset.carryContract;
+        row.style.display = 'none';
+        updateRowNumbers();
+        updateAddRowButtonState();
+      }
+
+      // 행 삭제 기능
       deleteButtons.forEach((btn) => {
         btn.addEventListener('click', function () {
           const row = this.closest('tr');
+          if (row) clearRow(row);
+        });
+      });
+
+      // 이월중단: 이 계약을 완료 처리 → 다음 달부터 이월 후보에서 제외
+      document.querySelectorAll('.carry-stop-btn').forEach((btn) => {
+        btn.addEventListener('click', function () {
+          const row = this.closest('tr');
           if (!row) return;
-
-          const inputs = row.querySelectorAll('input');
-          inputs.forEach((input) => {
-            input.value = '';
+          const dept = departmentSelect ? departmentSelect.value : '';
+          const vendor = row.dataset.carryVendor || '';
+          const contract = row.dataset.carryContract || '';
+          if (!dept || !vendor || !contract) return;
+          const ok = window.confirm(
+            '[' + vendor + ' / 계약금액 ' + formatNumberWithCommas(contract) + '원]\n\n' +
+              '이 계약을 완료 처리하고 이월을 중단할까요?\n' +
+              '잔액이 남아 있어도 다음 달부터 이월 후보에 나타나지 않습니다.\n' +
+              '(필요하면 상단 "이월중단 계약" 목록에서 해제할 수 있습니다)'
+          );
+          if (!ok) return;
+          postCarryStop(dept, vendor, contract, 'stop').then((res) => {
+            if (res && res.ok) {
+              // 화면에서도 제거하고 목록에 반영
+              for (let k = carryOverPlans.length - 1; k >= 0; k -= 1) {
+                const p = carryOverPlans[k];
+                if (p.department === dept && p.vendor_name === vendor && String(p.contract_amount) === contract) {
+                  carryOverPlans.splice(k, 1);
+                }
+              }
+              if (!carryStoppedList.some((c) => c.department === dept && c.vendor_name === vendor && String(c.contract_amount) === contract)) {
+                carryStoppedList.push({ department: dept, vendor_name: vendor, contract_amount: Number(contract) });
+              }
+              clearRow(row);
+              renderCarryStopped();
+            } else {
+              alert((res && res.error) || '이월중단 처리에 실패했습니다.');
+            }
           });
-
-          const summaryDiv = row.querySelector('.carry-summary');
-          if (summaryDiv && !summaryDiv.classList.contains('hidden')) {
-            summaryDiv.classList.add('hidden');
-          }
-
-          row.style.display = 'none';
-          updateRowNumbers();
-          updateAddRowButtonState();
         });
       });
 
@@ -425,6 +476,57 @@
       const submittedKeys = {{ submitted_keys|tojson|safe }};
       const closedKeys = {{ closed_keys|tojson|safe }};
       const existingNotice = document.getElementById('existing-plan-notice');
+
+      // 이월 중단(완료) 처리된 계약 목록 + 표시/해제
+      const carryStoppedList = {{ carry_stopped_list|tojson|safe }};
+      const carryStoppedInfo = document.getElementById('carry-stopped-info');
+
+      function postCarryStop(dept, vendor, contract, action) {
+        const fd = new FormData();
+        fd.append('vendor_name', vendor);
+        fd.append('contract_amount', String(contract));
+        fd.append('action', action);
+        return fetch('/departments/' + encodeURIComponent(dept) + '/carry-stop', { method: 'POST', body: fd })
+          .then((r) => r.json());
+      }
+
+      function renderCarryStopped() {
+        if (!carryStoppedInfo) return;
+        const dept = departmentSelect ? departmentSelect.value : '';
+        const mine = carryStoppedList.filter((c) => c.department === dept);
+        carryStoppedInfo.innerHTML = '';
+        if (!dept || !mine.length) {
+          carryStoppedInfo.classList.add('hidden');
+          return;
+        }
+        carryStoppedInfo.classList.remove('hidden');
+        const label = document.createElement('span');
+        label.textContent = '이월중단 계약: ';
+        carryStoppedInfo.appendChild(label);
+        mine.forEach((c) => {
+          const chip = document.createElement('span');
+          chip.className = 'mr-2 inline-flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5';
+          const txt = document.createElement('span');
+          txt.textContent = c.vendor_name + ' (' + formatNumberWithCommas(String(c.contract_amount)) + '원)';
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'text-indigo-600 underline';
+          btn.textContent = '해제';
+          btn.addEventListener('click', function () {
+            if (!window.confirm(c.vendor_name + ' 계약의 이월중단을 해제할까요?\n다시 이월 후보로 나타납니다.')) return;
+            postCarryStop(c.department, c.vendor_name, c.contract_amount, 'resume').then((res) => {
+              if (res && res.ok) {
+                window.location.reload();
+              } else {
+                alert((res && res.error) || '해제에 실패했습니다.');
+              }
+            });
+          });
+          chip.appendChild(txt);
+          chip.appendChild(btn);
+          carryStoppedInfo.appendChild(chip);
+        });
+      }
 
       // 선택한 부서/월에 임시저장본·최종제출·마감 건이 있으면 안내 문구 표시
       function updateExistingNotice() {
@@ -527,6 +629,11 @@
 
         // 한 행에 이월 후보의 누적지급/남은잔액 요약을 표시한다.
         function showCarrySummary(row, plan) {
+          // 이월 행 표시 + "이월중단" 버튼 노출 (계약 식별값 저장)
+          row.dataset.carryVendor = plan.vendor_name || '';
+          row.dataset.carryContract = plan.contract_amount != null ? String(plan.contract_amount) : '';
+          const stopBtn = row.querySelector('.carry-stop-btn');
+          if (stopBtn && plan.vendor_name && plan.contract_amount != null) stopBtn.classList.remove('hidden');
           const summaryDiv = row.querySelector('.carry-summary');
           const paidSpan = row.querySelector('.carry-paid');
           const remainingSpan = row.querySelector('.carry-remaining');
@@ -600,6 +707,7 @@
       function onDeptOrMonthChange() {
         applyCarryOver();        // 자동 이월(잔액/이월 건) 채우기 — 유지
         updateExistingNotice();  // 기존 임시저장/최종제출/마감 건 안내
+        renderCarryStopped();    // 이월중단 계약 목록(해제 가능)
       }
       if (departmentSelect) {
         departmentSelect.addEventListener('change', onDeptOrMonthChange);
