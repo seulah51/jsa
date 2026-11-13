@@ -480,6 +480,8 @@
       // 이월 중단(완료) 처리된 계약 목록 + 표시/해제
       const carryStoppedList = {{ carry_stopped_list|tojson|safe }};
       const carryStoppedInfo = document.getElementById('carry-stopped-info');
+      // 이월중단/해제는 관리자 전용 (일반 사용자는 목록만 조회)
+      const isAdmin = {{ 'true' if session.get('is_admin') else 'false' }};
 
       function postCarryStop(dept, vendor, contract, action) {
         const fd = new FormData();
@@ -523,7 +525,7 @@
             });
           });
           chip.appendChild(txt);
-          chip.appendChild(btn);
+          if (isAdmin) chip.appendChild(btn);
           carryStoppedInfo.appendChild(chip);
         });
       }
@@ -633,7 +635,7 @@
           row.dataset.carryVendor = plan.vendor_name || '';
           row.dataset.carryContract = plan.contract_amount != null ? String(plan.contract_amount) : '';
           const stopBtn = row.querySelector('.carry-stop-btn');
-          if (stopBtn && plan.vendor_name && plan.contract_amount != null) stopBtn.classList.remove('hidden');
+          if (isAdmin && stopBtn && plan.vendor_name && plan.contract_amount != null) stopBtn.classList.remove('hidden');
           const summaryDiv = row.querySelector('.carry-summary');
           const paidSpan = row.querySelector('.carry-paid');
           const remainingSpan = row.querySelector('.carry-remaining');

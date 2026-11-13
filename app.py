@@ -1968,7 +1968,10 @@ def send_department_notification():
 
 @app.route("/departments/<department>/carry-stop", methods=["POST"])
 def carry_stop(department: str):
-    """계약(업체명+계약금액)의 이월을 중단(action=stop)하거나 다시 허용(action=resume)한다."""
+    """관리자 전용: 계약(업체명+계약금액)의 이월을 중단(action=stop)하거나 다시 허용(action=resume)한다."""
+
+    if not session.get("is_admin"):
+        return {"ok": False, "error": "관리자만 이월중단/해제를 할 수 있습니다."}, 403
 
     vendor_name = request.form.get("vendor_name", "").strip()
     contract_raw = request.form.get("contract_amount", "").replace(",", "").strip()
