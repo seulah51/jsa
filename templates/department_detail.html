@@ -238,21 +238,49 @@
                 {% else %}
                   -
                 {% endif %}
+                {% if plan["carry_stopped"] %}
+                  <span class="ml-1 inline-flex items-center rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 border border-amber-200" title="잔액이 남아 있어도 다음 달로 이월되지 않습니다">이월중단</span>
+                {% endif %}
               </td>
               <td class="px-4 py-2 whitespace-nowrap text-center text-slate-500 text-xs">
                 {{ plan["created_at"] }}
               </td>
               {% if session.get('is_admin') %}
                 <td class="px-4 py-2 whitespace-nowrap text-center text-slate-800">
-                  <button
-                    type="submit"
-                    formmethod="post"
-                    formaction="{{ url_for('admin_delete_plan', plan_id=plan["id"], department=department, year_month=year_month) }}"
-                    onclick="return confirm('해당 계획을 삭제하시겠습니까?');"
-                    class="inline-flex items-center rounded-md border border-red-300 bg-white px-2 py-1 text-xs font-medium text-red-600 shadow-sm hover:bg-red-50"
-                  >
-                    삭제
-                  </button>
+                  <div class="inline-flex items-center gap-1">
+                    <button
+                      type="submit"
+                      formmethod="post"
+                      formaction="{{ url_for('admin_delete_plan', plan_id=plan["id"], department=department, year_month=year_month) }}"
+                      onclick="return confirm('해당 계획을 삭제하시겠습니까?');"
+                      class="inline-flex items-center rounded-md border border-red-300 bg-white px-2 py-1 text-xs font-medium text-red-600 shadow-sm hover:bg-red-50"
+                    >
+                      삭제
+                    </button>
+                    {% if plan["contract_amount"] is not none and plan["vendor_name"] %}
+                      {% if plan["carry_stopped"] %}
+                        <button
+                          type="button"
+                          class="carry-stop-toggle inline-flex items-center rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 shadow-sm hover:bg-slate-50"
+                          data-action="resume"
+                          data-vendor="{{ plan['vendor_name'] }}"
+                          data-contract="{{ plan['contract_amount'] }}"
+                        >
+                          이월중단 해제
+                        </button>
+                      {% elif plan["remaining"] is not none and plan["remaining"] > 0 %}
+                        <button
+                          type="button"
+                          class="carry-stop-toggle inline-flex items-center rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700 shadow-sm hover:bg-amber-100"
+                          data-action="stop"
+                          data-vendor="{{ plan['vendor_name'] }}"
+                          data-contract="{{ plan['contract_amount'] }}"
+                        >
+                          이월중단
+                        </button>
+                      {% endif %}
+                    {% endif %}
+                  </div>
                 </td>
               {% endif %}
             </tr>
@@ -443,6 +471,35 @@
         });
       });
     }
+
+    // 이월중단 / 해제 (관리자 전용, 마감된 달에서도 동작)
+    const carryDept = {{ department|tojson }};
+    document.querySelectorAll('.carry-stop-toggle').forEach((btn) => {
+      btn.addEventListener('click', function () {
+        const action = this.dataset.action;
+        const vendor = this.dataset.vendor;
+        const contract = this.dataset.contract;
+        const amountText = Number(contract).toLocaleString('ko-KR');
+        const msg = action === 'stop'
+          ? '[' + vendor + ' / 계약금액 ' + amountText + '원]\n\n이 계약을 완료 처리하고 이월을 중단할까요?\n잔액이 남아 있어도 다음 달부터 이월 후보에 나타나지 않습니다.'
+          : '[' + vendor + ' / 계약금액 ' + amountText + '원]\n\n이월중단을 해제할까요?\n다시 다음 달 이월 후보에 나타납니다.';
+        if (!window.confirm(msg)) return;
+        const fd = new FormData();
+        fd.append('vendor_name', vendor);
+        fd.append('contract_amount', contract);
+        fd.append('action', action);
+        fetch('/departments/' + encodeURIComponent(carryDept) + '/carry-stop', { method: 'POST', body: fd })
+          .then((r) => r.json())
+          .then((res) => {
+            if (res && res.ok) {
+              window.location.reload();
+            } else {
+              alert((res && res.error) || '처리에 실패했습니다.');
+            }
+          })
+          .catch(() => alert('처리 중 오류가 발생했습니다.'));
+      });
+    });
 
     if ((isClosedDetail || isCheckDeadlineOver) && detailForm) {
       const inputs = detailForm.querySelectorAll('input, textarea, select');

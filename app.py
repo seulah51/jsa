@@ -559,6 +559,13 @@ def department_detail(department: str, year_month: str):
             key = (row["vendor_name"], row["contract_amount"])
             totals_by_contract[key] = row["total_paid"] or 0
 
+        # 이월 중단(완료) 처리된 계약 (업체명+계약금액)
+        cursor.execute(
+            "SELECT vendor_name, contract_amount FROM carry_stopped WHERE department = ?",
+            (department,),
+        )
+        stopped_contracts = {(r[0], int(r[1])) for r in cursor.fetchall()}
+
     enriched_plans = []
     for row in plans:
         data = dict(row)
@@ -571,6 +578,10 @@ def department_detail(department: str, year_month: str):
             remaining = contract_amount - total_paid
         data["total_paid"] = total_paid
         data["remaining"] = remaining
+        data["carry_stopped"] = (
+            contract_amount is not None
+            and (data.get("vendor_name"), int(contract_amount)) in stopped_contracts
+        )
         enriched_plans.append(data)
 
     total_contract_amount = 0
