@@ -196,6 +196,43 @@ def get_departments() -> list[str]:
     return sorted(dept_keys)
 
 
+def compute_contract_payments(cursor, department: str | None = None) -> dict:
+    """계획 id -> (해당 계약 회차의 누적지급금액) 을 돌려준다.
+
+    계약은 (부서, 업체명, 계약금액) 으로 식별하되, 같은 키라도 앞 계약이 이미
+    다 지급된(등록 합계 >= 계약금액) 뒤에 올라온 건은 새 계약(다음 회차)으로 본다.
+    (예: 7월 50만원 부품 구매 완료 후 11월에 또 50만원짜리 다른 구매)
+    """
+    sql = """
+        SELECT id, department, vendor_name, contract_amount, amount, registered_flag
+        FROM fund_plans
+        WHERE vendor_name IS NOT NULL AND contract_amount IS NOT NULL
+    """
+    params: tuple = ()
+    if department is not None:
+        sql += " AND department = ?"
+        params = (department,)
+    sql += " ORDER BY department, vendor_name, contract_amount, year_month, id"
+    cursor.execute(sql, params)
+
+    row_cycle: dict[int, tuple] = {}
+    cycle_paid: dict[tuple, int] = {}
+    state: dict[tuple, list] = {}  # key -> [회차번호, 회차 누적]
+    for r in cursor.fetchall():
+        contract = int(r["contract_amount"])
+        key = (r["department"], r["vendor_name"], contract)
+        st = state.setdefault(key, [0, 0])
+        cycle_key = key + (st[0],)
+        row_cycle[r["id"]] = cycle_key
+        if r["registered_flag"] == 1:
+            st[1] += int(r["amount"] or 0)
+        cycle_paid[cycle_key] = st[1]
+        if contract > 0 and st[1] >= contract:
+            st[0] += 1
+            st[1] = 0
+    return {pid: cycle_paid[ck] for pid, ck in row_cycle.items()}
+
+
 def get_month_deadline(department: str, year_month: str) -> dict | None:
     with db_conn() as conn:
         cursor = conn.cursor()
@@ -526,21 +563,9 @@ def department_detail(department: str, year_month: str):
         )
         plans = cursor.fetchall()
 
-        # 같은 계약(업체명+계약금액) 기준으로 "실제 지급된 금액" 합계를 구해 남은 잔액 계산.
+        # 같은 계약(업체명+계약금액, 완료 후 재등록은 새 계약) 기준 누적지급금액.
         # (내용은 계약금/중도금 등 결제 단계별로 달라지므로 계약 식별 키에서 제외)
-        cursor.execute(
-            """
-            SELECT vendor_name, contract_amount, SUM(amount) AS total_paid
-            FROM fund_plans
-            WHERE department = ?
-              AND registered_flag = 1
-              AND vendor_name IS NOT NULL
-              AND contract_amount IS NOT NULL
-            GROUP BY vendor_name, contract_amount
-            """,
-            (department,),
-        )
-        total_rows = cursor.fetchall()
+        paid_by_plan = compute_contract_payments(cursor, department)
 
         # 마감 여부 확인
         cursor.execute(
@@ -553,11 +578,6 @@ def department_detail(department: str, year_month: str):
         )
         row = cursor.fetchone()
         is_closed = bool(row[0]) if row and row[0] is not None else False
-
-        totals_by_contract = {}
-        for row in total_rows:
-            key = (row["vendor_name"], row["contract_amount"])
-            totals_by_contract[key] = row["total_paid"] or 0
 
         # 이월 중단(완료) 처리된 계약 (업체명+계약금액)
         cursor.execute(
@@ -573,8 +593,7 @@ def department_detail(department: str, year_month: str):
         total_paid = None
         remaining = None
         if contract_amount is not None:
-            key = (data.get("vendor_name"), contract_amount)
-            total_paid = totals_by_contract.get(key, 0)
+            total_paid = paid_by_plan.get(data["id"], 0)
             remaining = contract_amount - total_paid
         data["total_paid"] = total_paid
         data["remaining"] = remaining
@@ -680,39 +699,7 @@ def export_department_plans(department: str, year_month: str):
                 )
             plans = cursor.fetchall()
 
-            if all_scope:
-                cursor.execute(
-                    """
-                    SELECT department, vendor_name, contract_amount, SUM(amount) AS total_paid
-                    FROM fund_plans
-                    WHERE registered_flag = 1
-                      AND vendor_name IS NOT NULL
-                      AND contract_amount IS NOT NULL
-                    GROUP BY department, vendor_name, contract_amount
-                    """,
-                )
-            else:
-                cursor.execute(
-                    """
-                    SELECT vendor_name, contract_amount, SUM(amount) AS total_paid
-                    FROM fund_plans
-                    WHERE department = ?
-                      AND registered_flag = 1
-                      AND vendor_name IS NOT NULL
-                      AND contract_amount IS NOT NULL
-                    GROUP BY vendor_name, contract_amount
-                    """,
-                    (department,),
-                )
-            total_rows = cursor.fetchall()
-
-        totals_by_contract: dict[tuple, int] = {}
-        for row in total_rows:
-            if all_scope:
-                key = (row["department"], row["vendor_name"], row["contract_amount"])
-            else:
-                key = (row["vendor_name"], row["contract_amount"])
-            totals_by_contract[key] = row["total_paid"] or 0
+            paid_by_plan = compute_contract_payments(cursor, None if all_scope else department)
 
         enriched_plans: list[dict] = []
         for row in plans:
@@ -721,11 +708,7 @@ def export_department_plans(department: str, year_month: str):
             total_paid = None
             remaining = None
             if contract_amount is not None:
-                if all_scope:
-                    key = (data.get("department"), data.get("vendor_name"), contract_amount)
-                else:
-                    key = (data.get("vendor_name"), contract_amount)
-                total_paid = totals_by_contract.get(key, 0)
+                total_paid = paid_by_plan.get(data["id"], 0)
                 remaining = contract_amount - total_paid
             data["total_paid"] = total_paid
             data["remaining"] = remaining
@@ -1319,83 +1302,44 @@ def new_plan():
     # 화면에서 선택한 부서/계획 월 기준으로 필터링해 사용한다.
     with db_conn() as conn:
         cursor = conn.cursor()
+        # 계약 회차별 누적지급 (완료된 계약 뒤에 같은 업체+금액으로 새로 올린 건은 새 계약)
+        paid_by_plan = compute_contract_payments(cursor)
+        cursor.execute(
+            "SELECT department, vendor_name, contract_amount FROM carry_stopped"
+        )
+        stopped_keys = {(r[0], r[1], int(r[2])) for r in cursor.fetchall()}
         cursor.execute(
             """
-            SELECT
-                year_month,
-                department,
-                vendor_name,
-                description,
-                contract_amount,
-                amount,
-                CASE
-                    WHEN contract_amount IS NOT NULL AND contract_amount > 0 THEN
-                        contract_amount - (
-                            SELECT IFNULL(SUM(amount), 0)
-                            FROM fund_plans AS fp2
-                            WHERE
-                                fp2.department = fund_plans.department
-                                AND fp2.vendor_name = fund_plans.vendor_name
-                                AND fp2.contract_amount = fund_plans.contract_amount
-                                AND fp2.registered_flag = 1
-                        )
-                    ELSE amount
-                END AS remaining_amount
+            SELECT id, year_month, department, vendor_name, description, contract_amount,
+                   amount, registered_flag, carry_over
             FROM fund_plans
             WHERE
                 -- 임시저장(미제출)은 이월 대상에서 제외한다.
                 status <> 'draft'
-                -- 이월 중단(완료) 처리된 계약은 제외한다.
-                AND NOT EXISTS (
-                    SELECT 1 FROM carry_stopped AS cs
-                    WHERE cs.department = fund_plans.department
-                      AND cs.vendor_name = fund_plans.vendor_name
-                      AND cs.contract_amount = fund_plans.contract_amount
-                )
-                AND (
-                    -- 명시적으로 '이월' 체크된 건
-                    carry_over = 1
-                    -- 또는 '등록여부(전표)'가 체크된 건 중 계약 잔액이 남은 건
-                    OR (
-                        registered_flag = 1
-                        AND contract_amount IS NOT NULL
-                        AND contract_amount > 0
-                        AND contract_amount > (
-                            SELECT IFNULL(SUM(amount), 0)
-                            FROM fund_plans AS fp2
-                            WHERE
-                                fp2.department = fund_plans.department
-                                AND fp2.vendor_name = fund_plans.vendor_name
-                                AND fp2.contract_amount = fund_plans.contract_amount
-                                AND fp2.registered_flag = 1
-                        )
-                    )
-                )
-                AND (
-                    CASE
-                        WHEN contract_amount IS NOT NULL AND contract_amount > 0 THEN
-                            contract_amount - (
-                                SELECT IFNULL(SUM(amount), 0)
-                                FROM fund_plans AS fp2
-                                WHERE
-                                    fp2.department = fund_plans.department
-                                    AND fp2.vendor_name = fund_plans.vendor_name
-                                    AND fp2.contract_amount = fund_plans.contract_amount
-                                    AND fp2.registered_flag = 1
-                            )
-                        ELSE amount
-                    END
-                ) > 0
+                AND (carry_over = 1 OR registered_flag = 1)
             ORDER BY year_month DESC, department ASC, vendor_name ASC, description ASC, id ASC
             """
         )
-        # DB row 객체는 바로 JSON 으로 직렬화할 수 없으므로, dict 로 변환해 템플릿에 전달한다.
-        # SUM() 결과는 Decimal 로 반환되므로 JSON 직렬화를 위해 int 로 변환한다.
         carry_over_plans = []
         for row in cursor.fetchall():
             d = dict(row)
-            if d.get("remaining_amount") is not None:
-                d["remaining_amount"] = int(d["remaining_amount"])
+            contract = d.get("contract_amount")
+            has_contract = contract is not None and int(contract) > 0
+            # 이월 중단(완료) 처리된 계약은 제외한다.
+            if contract is not None and (d["department"], d["vendor_name"], int(contract)) in stopped_keys:
+                continue
+            if has_contract:
+                remaining = int(contract) - int(paid_by_plan.get(d["id"], 0))
+            else:
+                remaining = int(d.get("amount") or 0)
+            # 명시적으로 '이월' 체크된 건, 또는 등록된 건 중 계약 잔액이 남은 건
+            if not (d["carry_over"] == 1 or (d["registered_flag"] == 1 and has_contract)):
+                continue
+            if remaining <= 0:
+                continue
+            d["remaining_amount"] = remaining
+            for k in ("id", "registered_flag", "carry_over"):
+                d.pop(k, None)
             carry_over_plans.append(d)
 
     # 부서/월별 기존 자금계획 상태(임시저장/최종제출/마감)를 화면 안내용으로 수집한다.
