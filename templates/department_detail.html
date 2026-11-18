@@ -172,31 +172,11 @@
                     value="{{ '{:,}'.format(plan["contract_amount"]) if plan["contract_amount"] is not none else '' }}"
                     class="money-edit contract-input hidden w-28 rounded-md border border-slate-300 px-2 py-1 text-right text-xs shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                   />
-                  {% if plan["contract_amount"] is not none and plan["vendor_name"] %}
-                    {% if plan["carry_stopped"] %}
-                      <button
-                        type="button"
-                        class="carry-stop-toggle inline-flex items-center rounded-md border border-slate-300 bg-white ml-1 px-1.5 py-0.5 text-[11px] font-medium text-slate-600 shadow-sm hover:bg-slate-50"
-                        data-action="resume"
-                        data-vendor="{{ plan['vendor_name'] }}"
-                        data-contract="{{ plan['contract_amount'] }}"
-                      >
-                        이월중단 해제
-                      </button>
-                    {% elif plan["remaining"] is not none and plan["remaining"] > 0 %}
-                      <button
-                        type="button"
-                        class="carry-stop-toggle inline-flex items-center rounded-md border border-amber-300 bg-amber-50 ml-1 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 shadow-sm hover:bg-amber-100"
-                        data-action="stop"
-                        data-vendor="{{ plan['vendor_name'] }}"
-                        data-contract="{{ plan['contract_amount'] }}"
-                      >
-                        이월중단
-                      </button>
-                    {% endif %}
-                  {% endif %}
                 {% else %}
                   {% if plan["contract_amount"] is not none %}{{ "{:,.0f}".format(plan["contract_amount"]) }} 원{% else %}-{% endif %}
+                {% endif %}
+                {% if plan["carry_stopped"] %}
+                  <span class="ml-1 inline-flex items-center rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 border border-amber-200" title="잔액이 남아 있어도 다음 달로 이월되지 않습니다">이월중단</span>
                 {% endif %}
               </td>
               <td class="px-4 py-2 whitespace-nowrap text-center tabular-nums text-slate-900">
@@ -261,9 +241,6 @@
                 {% else %}
                   -
                 {% endif %}
-                {% if plan["carry_stopped"] %}
-                  <span class="ml-1 inline-flex items-center rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 border border-amber-200" title="잔액이 남아 있어도 다음 달로 이월되지 않습니다">이월중단</span>
-                {% endif %}
               </td>
               <td class="px-4 py-2 whitespace-nowrap text-center text-slate-500 text-xs">
                 {{ plan["created_at"] }}
@@ -280,6 +257,29 @@
                     >
                       삭제
                     </button>
+                    {% if plan["contract_amount"] is not none and plan["vendor_name"] %}
+                      {% if plan["carry_stopped"] %}
+                        <button
+                          type="button"
+                          class="carry-stop-toggle inline-flex items-center rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 shadow-sm hover:bg-slate-50"
+                          data-action="resume"
+                          data-vendor="{{ plan['vendor_name'] }}"
+                          data-contract="{{ plan['contract_amount'] }}"
+                        >
+                          이월중단 해제
+                        </button>
+                      {% elif plan["remaining"] is not none and plan["remaining"] > 0 %}
+                        <button
+                          type="button"
+                          class="carry-stop-toggle inline-flex items-center rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700 shadow-sm hover:bg-amber-100"
+                          data-action="stop"
+                          data-vendor="{{ plan['vendor_name'] }}"
+                          data-contract="{{ plan['contract_amount'] }}"
+                        >
+                          이월중단
+                        </button>
+                      {% endif %}
+                    {% endif %}
                   </div>
                 </td>
               {% endif %}
